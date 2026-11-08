@@ -1,6 +1,6 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.2.5';
+const VERSION = 'v1.2.7';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [
@@ -61,7 +61,8 @@ self.addEventListener('fetch', (event) => {
   if (sameOrigin) {
     event.respondWith((async () => {
       try {
-        const fresh = await fetch(req);
+        // 'no-cache': altijd bij GitHub nagaan of er een nieuwere versie is (buffer van max. 10 min overslaan)
+        const fresh = await fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' });
         if (fresh.ok) { const c = await caches.open(CACHE); c.put(req, fresh.clone()); }
         return fresh;
       } catch {
