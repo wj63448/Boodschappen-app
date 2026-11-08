@@ -1780,13 +1780,13 @@ function sheetDish(sh) {
   const d = S.dishes.find((x) => x.id === sh.id);
   if (!d) return null;
   const onList = new Set(S.items.filter((i) => i.status === 'open').map((i) => norm(i.name)));
-  if (!sh.sel) sh.sel = (d.items || []).map((x) => !onList.has(norm(x.name)));
+  if (!sh.sel) sh.sel = (d.items || []).map(() => true);
   return h('div', { class: 'col', style: { gap: '12px' } },
     h('h2', {}, d.name),
     h('div', { class: 'small muted' }, 'Vink uit wat je nog in huis hebt.'),
     h('div', { class: 'list' }, (d.items || []).map((x, i) => h('label', { class: 'row', style: { padding: '10px 14px', minHeight: '52px' } },
       h('input', { type: 'checkbox', checked: sh.sel[i], style: { width: '22px', height: '22px' }, onchange: (e) => { sh.sel[i] = e.target.checked; } }),
-      h('span', { class: 'grow' }, x.name, onList.has(norm(x.name)) ? h('span', { class: 'small muted' }, ' · al op lijst') : null),
+      h('span', { class: 'grow' }, x.name, onList.has(norm(x.name)) ? h('span', { class: 'small muted' }, ' · staat al op de lijst (wordt bijgeteld)') : null),
       h('span', { class: 'muted' }, fmtQty(x.qty, x.unit))))),
     h('button', { class: 'btn primary big block', onclick: () => {
       let n = 0;
