@@ -113,6 +113,8 @@ export function parseImport(sheets) {
         for (const c of [cols.photo, cols.link, cols.nr]) {
           if (c == null) continue;
           const info = { ...analyseUrl(linkAt(r, c)), ...analyseUrl(row[c]) };
+          // In de kolom Foto is elk webadres dat geen productpagina is een afbeelding
+          if (c === cols.photo && info.link && !info.shopNr) { info.photo = info.link; delete info.link; }
           if (info.photo && !item.photo) item.photo = info.photo;
           if (info.shopNr && !item.shopNr) item.shopNr = info.shopNr;
           if (info.link && !item.link && !info.shopNr) item.link = info.link;
