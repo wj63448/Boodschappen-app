@@ -1901,6 +1901,33 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.sheet)
 readJoinFromUrl();
 render();
 
+// ---------------------------------------------------------------------
+//  Terugknop (Android) en veeg-terug: binnen de app blijven
+// ---------------------------------------------------------------------
+let lastBackAt = 0;
+function pushGuard() { try { history.pushState({ app: 'guard' }, ''); } catch { /* */ } }
+try { history.replaceState({ app: 'root' }, ''); } catch { /* */ }
+pushGuard();
+window.addEventListener('popstate', () => {
+  if (S.sheet) { S.sheet = null; render(); pushGuard(); return; }
+  if (S.swiped) { S.swiped = null; render(); pushGuard(); return; }
+  if (S.wizard) {
+    if (S.wizard.step === 2) S.wizard.step = 1;
+    else if (S.wizard.step === 1 && S.household) S.wizard = null;
+    render(); pushGuard(); return;
+  }
+  if (S.household) {
+    if (S.page) { S.page = null; render(); pushGuard(); return; }
+    if (S.view === 'history') { S.view = 'settings'; render(); pushGuard(); return; }
+    if (S.view !== 'list') { S.view = 'list'; window.scrollTo(0, 0); render(); pushGuard(); return; }
+  }
+  // Op het hoofdscherm: pas bij een tweede druk binnen 2 seconden afsluiten
+  if (Date.now() - lastBackAt < 2000) { history.back(); return; }
+  lastBackAt = Date.now();
+  pushGuard();
+  toast('Druk nog eens op terug om de app te sluiten');
+});
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker niet geregistreerd', e));
 }
