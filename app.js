@@ -447,7 +447,23 @@ function subscribeRest(hid) {
   sub(collection(db, 'households', hid, 'cards'), 'cards');
   sub(query(collection(db, 'households', hid, 'history'), orderBy('at', 'desc'), limit(300)), 'history');
   sub(query(collection(db, 'households', hid, 'events'), orderBy('at', 'desc'), limit(5)), 'events');
-  if (realRole() === 'admin') sub(collection(db, 'households', hid, 'invites'), 'invites');
+  if (realRole() === 'admin') {
+    sub(collection(db, 'households', hid, 'invites'), 'invites');
+    setTimeout(() => cleanupOldEvents(hid), 5000);
+  }
+}
+
+// Meldingen "Ik ga winkelen" ouder dan 30 dagen opruimen (enkel beheerders, max. 1 keer per dag)
+async function cleanupOldEvents(hid) {
+  const key = 'cleanup:' + hid;
+  if (Date.now() - (store.get(key, 0) || 0) < 864e5) return;
+  try {
+    const cutoff = Date.now() - 30 * 864e5;
+    const snap = await getDocs(collection(db, 'households', hid, 'events'));
+    const old = snap.docs.filter((d) => { const t = toDate(d.data().at); return t && t.getTime() < cutoff; });
+    if (old.length) await commitInChunks(old.map((d) => (b) => b.delete(d.ref)));
+    store.set(key, Date.now());
+  } catch (e) { console.warn('Opruimen mislukt', e); }
 }
 
 let eventsPrimed = false;
