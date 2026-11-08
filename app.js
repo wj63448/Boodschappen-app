@@ -2,7 +2,7 @@
 //  Boodschappen – gezinsapp (PWA + Firebase)
 // =====================================================================
 import { firebaseConfig, FEATURES, APP_NAME } from './config.js';
-import { CATEGORIES, MANUAL_CATEGORY, UNITS, SHOPS, SHOP_LINKS, startCatalog, startDishes } from './startcatalogus.js';
+import { CATEGORIES, MANUAL_CATEGORY, UNITS, SHOPS, SHOP_LINKS, DEPT_PHOTOS, DEPT_COLORS, DEPT_FALLBACK, startCatalog, startDishes } from './startcatalogus.js';
 import { parseImport } from './import.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
@@ -170,19 +170,99 @@ function catIcon(cat) {
   return 'jar';
 }
 
-function thumb(photo, cat, small) {
-  const box = h('div', { class: 'thumb' + (small ? ' sm' : '') + (photo ? '' : ' none') });
+function thumb(photo, cat, small, ds) {
+  const box = h('div', { class: 'thumb' + (small ? ' sm' : '') + (photo ? '' : ' none') + (ds && !photo ? ' dthumb' : '') });
   if (photo) {
     const img = h('img', { src: photo, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' });
     img.addEventListener('error', () => { box.classList.add('none'); box.innerHTML = ''; box.append(icon(catIcon(cat), small ? 20 : 24, '#5B655E', 1.8)); });
     box.append(img);
   } else {
-    box.append(icon(catIcon(cat), small ? 20 : 24, '#5B655E', 1.8));
+    box.append(icon(ds ? ds.icon : catIcon(cat), small ? 20 : 24, ds ? ds.ink : '#5B655E', 1.8));
   }
   return box;
 }
 
 const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+
+// ---------- Afdelingen: foto, kleur en icoon ----------
+function deptPhoto(cat) {
+  const own = S.household?.deptPhotos || {};
+  if (own[cat] !== undefined) return own[cat] || '';
+  return DEPT_PHOTOS[norm(cat)] || '';
+}
+const deptColorCache = store.get('deptColors', {});
+const deptColorBusy = {};
+function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function rgbToHex(r, g, b) { return '#' + [r, g, b].map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join(''); }
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b); let hh = 0, ss = 0; const l = (mx + mn) / 2;
+  if (mx !== mn) { const d = mx - mn; ss = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    hh = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; hh /= 6; }
+  return [hh, ss, l];
+}
+function hslToHex(hh, ss, l) {
+  const f = (n) => { const k = (n + hh * 12) % 12; const a = ss * Math.min(l, 1 - l); return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+  return rgbToHex(f(0) * 255, f(8) * 255, f(4) * 255);
+}
+// Haalt de meest uitgesproken kleur uit een foto (werkt bij foto's die dat toelaten, zoals Unsplash en Pexels)
+function extractDeptColor(url) {
+  if (!url || deptColorCache[url] || deptColorBusy[url]) return;
+  deptColorBusy[url] = true;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    try {
+      const c = document.createElement('canvas'); c.width = 48; c.height = 32;
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, 48, 32);
+      const d = ctx.getImageData(0, 0, 48, 32).data;
+      const buckets = new Array(24).fill(0).map(() => ({ w: 0, r: 0, g: 0, b: 0 }));
+      for (let i = 0; i < d.length; i += 4) {
+        const [hh, ss, l] = rgbToHsl(d[i], d[i + 1], d[i + 2]);
+        const w = ss * (1 - Math.abs(l - 0.5) * 1.6);
+        if (w <= 0.05) continue;
+        const bk = buckets[Math.floor(hh * 24) % 24];
+        bk.w += w; bk.r += d[i] * w; bk.g += d[i + 1] * w; bk.b += d[i + 2] * w;
+      }
+      const best = buckets.reduce((a, b2) => (b2.w > a.w ? b2 : a));
+      if (best.w > 0) {
+        const [hh, ss] = rgbToHsl(best.r / best.w, best.g / best.w, best.b / best.w);
+        const sat = Math.min(0.75, Math.max(0.35, ss));
+        deptColorCache[url] = [hslToHex(hh, sat, 0.28), hslToHex(hh, Math.min(0.5, sat), 0.92)];
+        store.set('deptColors', deptColorCache);
+        render();
+      }
+    } catch { /* foto laat geen kleuren uitlezen: standaardkleur blijft */ }
+  };
+  img.src = url;
+}
+function deptStyle(cat) {
+  const n = norm(cat);
+  let ink, tint, ic = catIcon(cat);
+  const hit = DEPT_COLORS.find(([re]) => re.test(n));
+  if (hit) { ink = hit[1]; tint = hit[2]; ic = hit[3]; }
+  else { let s2 = 0; for (const ch of n) s2 = (s2 * 31 + ch.charCodeAt(0)) >>> 0; [ink, tint] = DEPT_FALLBACK[s2 % DEPT_FALLBACK.length]; }
+  const photo = deptPhoto(cat);
+  // Gekende afdelingen houden hun vaste kleur (groenten groen, vlees rood …);
+  // voor andere afdelingen met een foto halen we de kleur uit de foto.
+  if (photo && !hit) {
+    if (deptColorCache[photo]) [ink, tint] = deptColorCache[photo];
+    else extractDeptColor(photo);
+  }
+  return { ink, tint, icon: ic, photo };
+}
+function deptHeader(cat, count) {
+  const ds = deptStyle(cat);
+  if (ds.photo) {
+    const box = h('div', { class: 'dept-banner' },
+      h('img', { src: ds.photo, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }),
+      h('div', { class: 'shade' }),
+      h('div', { class: 'cap' }, h('h2', {}, cat), h('span', { class: 'cnt' }, String(count))));
+    box.querySelector('img').addEventListener('error', () => { box.classList.add('noimg'); box.style.background = ds.ink; });
+    return box;
+  }
+  return h('div', { class: 'dept-bar', style: { background: ds.ink } }, icon(ds.icon, 22, '#fff'), h('h2', {}, cat), h('span', { class: 'cnt' }, String(count)));
+}
 const fmtNum = (n) => (Math.round(n * 100) / 100).toLocaleString('nl-BE');
 function fmtQty(q, unit) {
   if (unit === 'stuk') return `${fmtNum(q)} ${q === 1 ? 'stuk' : 'stuks'}`;
@@ -728,6 +808,13 @@ function doRender() {
   root.append(screen);
 
   if (S.sheet) root.append(renderSheet());
+  if (S.debug) {
+    const mode = matchMedia('(display-mode: standalone)').matches ? 'geïnstalleerde app' : 'browser';
+    const br = /SamsungBrowser/.test(navigator.userAgent) ? 'Samsung Internet' : /Chrome\//.test(navigator.userAgent) ? 'Chrome' : /Safari\//.test(navigator.userAgent) ? 'Safari' : 'andere';
+    root.append(h('div', { style: { position: 'fixed', left: '8px', right: '8px', top: 'calc(8px + var(--safe-top))', zIndex: 70, background: 'rgba(20,26,22,.92)', color: '#fff', borderRadius: '12px', padding: '10px 12px', fontSize: '11px', fontFamily: 'monospace', lineHeight: 1.4, pointerEvents: 'none' } },
+      h('div', { style: { fontWeight: 700 } }, `${mode} · ${br} · v${window.APP_VERSION}`),
+      dbg.map((l) => h('div', {}, l))));
+  }
   if (S.toast) {
     const firstToast = !S.toast._shown; S.toast._shown = true;
     root.append(h('div', { class: 'toast' + (firstToast ? ' anim' : ''), role: 'status' },
@@ -977,7 +1064,8 @@ function renderList() {
       h('div', {}, open.length === 0 && cart.length && shopper ? 'Rond je winkelbeurt af met de knop onderaan.' : 'Tik op Toevoegen om iets op de lijst te zetten.')));
   }
   for (const [cat, items] of groups) {
-    main.append(h('section', { class: 'section' }, h('h2', { class: 'group-h' }, cat), h('div', { class: 'list' }, items.map((it) => listRow(it)))));
+    const ds = deptStyle(cat);
+    main.append(h('section', { class: 'dept', style: { '--dink': ds.ink, '--dtint': ds.tint } }, deptHeader(cat, items.length), h('div', { class: 'list dept-list' }, items.map((it) => listRow(it, false, ds)))));
   }
   if (showAll && cart.length) {
     const inCart = cart.filter((i) => !S.pending[i.id]);
@@ -999,7 +1087,7 @@ function groupBy(items) {
   return res;
 }
 
-function listRow(it, cartSection) {
+function listRow(it, cartSection, ds) {
   const shopper = canShop();
   const inCart = it.status === 'cart';
   const pending = inCart && S.pending[it.id];
@@ -1039,14 +1127,14 @@ function listRow(it, cartSection) {
 
   const content = h('div', { class: 'content' + (pending ? ' incart' : ''), style: { transform: swiped ? `translateX(-${width}px)` : '' } },
     lead,
-    thumb(photoFor(it), it.category),
+    thumb(photoFor(it), it.category, false, ds),
     h('div', { class: 'grow col', style: { gap: '2px' } },
       h('div', { class: 'iname', style: { color: cartSection ? 'var(--ink-2)' : 'var(--ink)' } }, it.name),
       it.note && !pending ? h('div', { class: 'inote' }, '“' + it.note + '”') : null,
       pending
         ? h('div', { class: 'row wrap', style: { gap: '4px 10px' } }, h('span', { class: 'small bold', style: { color: 'var(--accent-ink)', whiteSpace: 'nowrap' } }, 'In de mand'), h('button', { class: 'undo', style: { whiteSpace: 'nowrap' }, onclick: (e) => { e.stopPropagation(); takeOutOfCart(it); } }, 'Ongedaan maken'))
         : h('div', { class: 'imeta' }, metaBits)),
-    h('div', { class: 'qty' }, fmtQty(qty, it.unit)));
+    h('div', { class: 'qty' + (ds ? ' dq' : '') }, fmtQty(qty, it.unit)));
 
   content.addEventListener('click', () => {
     if (content.dataset.dragged) { delete content.dataset.dragged; return; }
@@ -1323,7 +1411,7 @@ function renderSettings() {
         realRole() !== 'member' ? nav('Bekijk als…', 'testweergave voor een andere rol', 'viewas', 'user') : null,
         nav('Account & privacy', null, 'account', 'user')),
       h('button', { class: 'btn block', onclick: () => signOut(auth) }, 'Afmelden'),
-      h('div', { class: 'tiny muted center' }, `${APP_NAME} · versie ${window.APP_VERSION || ''}`)));
+      h('button', { class: 'tiny muted center', style: { border: 'none', background: 'none', padding: '8px' }, onclick: () => { S.vtaps = (S.vtaps || 0) + 1; if (S.vtaps >= 5) { S.vtaps = 0; S.debug = !S.debug; render(); } } }, `${APP_NAME} · versie ${window.APP_VERSION || ''}`)));
 }
 
 function subHead(title) {
@@ -1406,7 +1494,32 @@ function pageShops() {
         h('span', { class: 'muted bold', style: { width: '24px' } }, String(i + 1)),
         h('span', { class: 'grow' }, c),
         h('button', { class: 'iconbtn plain', 'aria-label': `${c} omhoog`, disabled: i === 0 ? true : null, onclick: () => move(i, -1) }, icon('up', 20)),
-        h('button', { class: 'iconbtn plain', 'aria-label': `${c} omlaag`, disabled: i === full.length - 1 ? true : null, onclick: () => move(i, 1) }, icon('down', 20)))))) : h('div', { class: 'muted' }, 'Voeg eerst een winkel toe.')));
+        h('button', { class: 'iconbtn plain', 'aria-label': `${c} omlaag`, disabled: i === full.length - 1 ? true : null, onclick: () => move(i, 1) }, icon('down', 20)))))) : h('div', { class: 'muted' }, 'Voeg eerst een winkel toe.'),
+    h('section', { class: 'section' },
+      h('h2', { class: 'group-h' }, 'Foto per afdeling'),
+      h('div', { class: 'small muted' }, 'Plak het adres van een foto (bv. van Unsplash of Pexels). Leeg = standaard of gekleurde balk.'),
+      h('div', { class: 'col', style: { gap: '10px' } }, allCategories().map((c) => {
+        const cur = (S.household.deptPhotos || {})[c];
+        const shown = deptPhoto(c);
+        return h('div', { class: 'card', style: { overflow: 'hidden' } },
+          deptHeader(c, '·'),
+          h('div', { class: 'row', style: { padding: '8px' } },
+            h('input', { class: 'field', 'data-key': 'dp-' + c, style: { height: '42px', fontSize: '14px' }, placeholder: shown ? 'standaardfoto' : 'https://…', value: cur || '', 'aria-label': 'Foto voor ' + c,
+              onchange: (e) => { const v = normalizePhotoUrl(e.target.value.trim()); bg(updateDoc(hhRef(), { deptPhotos: { ...(S.household.deptPhotos || {}), [c]: v } })); } }),
+            cur !== undefined ? h('button', { class: 'btn sm', onclick: () => { const m = { ...(S.household.deptPhotos || {}) }; delete m[c]; bg(updateDoc(hhRef(), { deptPhotos: m })); } }, 'Standaard') : null));
+      })))));
+}
+
+// Maakt van een Pexels-pagina of een te grote Unsplash-link een geschikt fotoadres
+function normalizePhotoUrl(u) {
+  if (!u) return '';
+  const px = u.match(/pexels\.com\/(?:[a-z-]+\/)?(?:photo|foto)\/[^/]*?-?(\d+)\/?$/i);
+  if (px) return `https://images.pexels.com/photos/${px[1]}/pexels-photo-${px[1]}.jpeg?auto=compress&cs=tinysrgb&w=800`;
+  if (/images\.pexels\.com\/photos\/\d+\/[^?]+$/i.test(u)) return u + '?auto=compress&cs=tinysrgb&w=800';
+  if (/images\.unsplash\.com\//i.test(u)) {
+    try { const x = new URL(u); x.searchParams.set('w', '800'); x.searchParams.set('q', '70'); x.searchParams.set('auto', 'format'); x.searchParams.set('fit', 'crop'); return x.toString(); } catch { return u; }
+  }
+  return u;
 }
 
 function pageCatalog() {
@@ -1639,6 +1752,9 @@ async function runImport() {
     if (imp.use.dishes && imp.dishes.length) await replace('dishes', imp.dishes);
     if (imp.use.cards && imp.cards.length) await replace('cards', imp.cards);
     await commitInChunks(ops);
+    if (imp.use.routes && Object.keys(imp.deptPhotos || {}).length) {
+      await updateDoc(hhRef(), { deptPhotos: { ...(S.household.deptPhotos || {}), ...Object.fromEntries(Object.entries(imp.deptPhotos).map(([k, v]) => [k, normalizePhotoUrl(v)])) } });
+    }
     if (imp.use.routes && Object.keys(imp.routes).length) {
       const upd = {};
       for (const k in imp.routes) upd['routes.' + k] = imp.routes[k];
@@ -1924,6 +2040,8 @@ render();
 //  voegen we stappen toe vlak na een tik (bij het openen van een scherm).
 // ---------------------------------------------------------------------
 let histDepth = 0, ignorePops = 0, rootGuard = false;
+const dbg = [];
+function dlog(t) { dbg.push(new Date().toLocaleTimeString('nl-BE') + ' ' + t + ' · len ' + history.length + ' · diepte ' + histDepth + (rootGuard ? ' · wacht' : '')); if (dbg.length > 12) dbg.shift(); if (S.debug) render(); }
 function navLevel() {
   if (!S.user) return 0;
   if (S.wizard) return (S.household ? 1 : 0) + (S.wizard.step === 2 ? 1 : 0);
@@ -1942,11 +2060,13 @@ function syncHistory() {
     if (level > histDepth) {
       for (let i = histDepth; i < level; i++) history.pushState({ app: 'nav' }, '');
       histDepth = level;
+      dlog('stap(pen) toegevoegd → niveau ' + level + (navigator.userActivation ? ' · tik ' + navigator.userActivation.isActive : ''));
     } else if (level < histDepth) {
       const n = histDepth - level;
       histDepth = level;
       ignorePops++;
       history.go(-n);
+      dlog(n + ' stap(pen) terug via app');
     }
   } catch { /* */ }
 }
@@ -1965,11 +2085,12 @@ function stepBack() {
 // niet bij pointerdown. Alleen dan aanvaardt Chrome de extra terug-stap.
 function ensureRootGuard() {
   if (rootGuard || histDepth !== 0 || !S.user) return;
-  if (navigator.userActivation && !navigator.userActivation.isActive) return;
-  try { history.pushState({ app: 'root' }, ''); rootGuard = true; } catch { /* */ }
+  if (navigator.userActivation && !navigator.userActivation.isActive) { dlog('wachtstap overgeslagen: geen tik'); return; }
+  try { history.pushState({ app: 'root' }, ''); rootGuard = true; dlog('wachtstap toegevoegd'); } catch (e) { dlog('fout ' + e.message); }
 }
 ['click', 'touchend', 'keydown'].forEach((ev) => document.addEventListener(ev, ensureRootGuard, true));
 window.addEventListener('popstate', () => {
+  dlog('TERUG ontvangen');
   if (ignorePops > 0) { ignorePops--; return; }
   S.swiped = null;
   if (histDepth > 0) { histDepth--; stepBack(); render(); return; }

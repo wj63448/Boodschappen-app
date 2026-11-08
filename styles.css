@@ -203,3 +203,22 @@ label.lbl { display: flex; flex-direction: column; gap: 6px; font-size: 15px; fo
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- Afdelingen (fotobanner / kleurbalk) ---------- */
+.dept { display: flex; flex-direction: column; border-radius: 18px; overflow: hidden; background: var(--card); box-shadow: 0 1px 2px rgba(30,42,34,.08); border: 1px solid var(--line); }
+.dept-list { border: none; border-radius: 0; }
+.dept-banner { position: relative; height: 76px; overflow: hidden; background: var(--dink, #4E5952); }
+.dept-banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 45%; }
+.dept-banner .shade { position: absolute; inset: 0; background: rgba(20,24,16,.5); }
+.dept-banner.noimg img, .dept-banner.noimg .shade { display: none; }
+.dept-banner .cap { position: absolute; left: 14px; right: 14px; bottom: 10px; display: flex; align-items: center; gap: 10px; }
+.dept-banner h2, .dept-bar h2 { margin: 0; flex: 1; font-family: var(--display); font-weight: 700; color: #fff; }
+.dept-banner h2 { font-size: 22px; text-shadow: 0 1px 3px rgba(0,0,0,.35); }
+.dept-bar { height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; }
+.dept-bar h2 { font-size: 18px; }
+.dept .cnt { font-size: 13px; font-weight: 700; color: #fff; background: rgba(255,255,255,.24); padding: 2px 9px; border-radius: 999px; }
+.dept .cb { border-color: var(--dink); }
+.dept .cb.on { background: var(--dink); border-color: var(--dink); }
+.dept .qty.dq { color: var(--dink); background: var(--dtint); padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; }
+.thumb.dthumb { background: var(--dtint); border: none; }
+.dept .lrow .content.incart { background: var(--dtint); }

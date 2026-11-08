@@ -73,7 +73,7 @@ function analyseUrl(url) {
 }
 
 export function parseImport(sheets) {
-  const out = { catalog: [], dishes: [], routes: {}, cards: [], warnings: [], found: [] };
+  const out = { catalog: [], dishes: [], routes: {}, cards: [], deptPhotos: {}, warnings: [], found: [] };
 
   for (const sh of sheets) {
     const rows = sh.rows || [];
@@ -92,7 +92,7 @@ export function parseImport(sheets) {
 
     const cols = {};
     header.forEach((c, i) => {
-      const r = kind === 'route' ? (key(c) && SYN.category.includes(key(c)) ? 'category' : SYN.order.includes(key(c)) ? 'order' : SYN.shop.includes(key(c)) ? 'shop' : null) : roleOf(c, kind);
+      const r = kind === 'route' ? (key(c) && SYN.category.includes(key(c)) ? 'category' : SYN.order.includes(key(c)) ? 'order' : SYN.shop.includes(key(c)) ? 'shop' : SYN.photo.includes(key(c)) ? 'photo' : null) : roleOf(c, kind);
       if (r && cols[r] == null) cols[r] = i;
     });
     const linkAt = (r, c) => (sh.links && sh.links[r + ',' + c]) || '';
@@ -161,7 +161,7 @@ export function parseImport(sheets) {
         // De winkelnaam staat in de titelrij, of in een tekstcel net onder "Volgorde".
         const shopCols = [];
         header.forEach((c, i) => {
-          if (i === catCol || isEmpty(c)) return;
+          if (i === catCol || i === cols.photo || isEmpty(c)) return;
           let name = SYN.order.includes(key(c)) ? '' : text(c);
           if (!name) {
             for (let r = hr + 1; r < Math.min(rows.length, hr + 4); r++) {
@@ -180,7 +180,14 @@ export function parseImport(sheets) {
           }
         }
       }
-      out.found.push(`${sh.name}: looproute voor ${Object.keys(out.routes).join(', ') || 'geen winkel'}`);
+      if (cols.photo != null) {
+        for (const [r, row] of data) {
+          const cat = text(row[catCol]);
+          const u = text(linkAt(r, cols.photo)) || text(row[cols.photo]);
+          if (cat && /^https?:\/\//i.test(u)) out.deptPhotos[cat] = u;
+        }
+      }
+      out.found.push(`${sh.name}: looproute voor ${Object.keys(out.routes).join(', ') || 'geen winkel'}${Object.keys(out.deptPhotos).length ? ' · ' + Object.keys(out.deptPhotos).length + " afdelingsfoto's" : ''}`);
     }
 
     if (kind === 'card') {

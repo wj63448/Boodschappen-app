@@ -1,6 +1,6 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.2.7';
+const VERSION = 'v1.3.0';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [
@@ -54,8 +54,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/__/')) return;
 
   const sameOrigin = url.origin === self.location.origin;
-  const cacheable = sameOrigin || EXTERNAL.includes(req.url) || url.hostname.startsWith('fonts.');
+  const isDeptPhoto = url.hostname === 'images.unsplash.com' || url.hostname === 'images.pexels.com';
+  const cacheable = sameOrigin || EXTERNAL.includes(req.url) || url.hostname.startsWith('fonts.') || isDeptPhoto;
   if (!cacheable) return; // productfoto's e.d. gewoon via het netwerk
+  if (isDeptPhoto && req.mode === 'cors') return; // kleur uitlezen: rechtstreeks, niet uit de cache
 
   // Eigen bestanden: netwerk eerst (altijd de nieuwste versie), cache als terugval.
   if (sameOrigin) {
