@@ -742,6 +742,7 @@ function doRender() {
   window.scrollTo(0, scrollY);
   const ns = document.querySelector('.sheet');
   if (ns) ns.scrollTop = sheetScroll;
+  syncHistory();
 }
 
 function renderLoading() {
@@ -1918,30 +1919,57 @@ readJoinFromUrl();
 render();
 
 // ---------------------------------------------------------------------
-//  Terugknop (Android) en veeg-terug: binnen de app blijven
+//  Terugknop (Android) en veeg-terug (iPhone): binnen de app blijven.
+//  Chrome slaat geschiedenis over die zonder tik werd toegevoegd; daarom
+//  voegen we stappen toe vlak na een tik (bij het openen van een scherm).
 // ---------------------------------------------------------------------
-let lastBackAt = 0;
-function pushGuard() { try { history.pushState({ app: 'guard' }, ''); } catch { /* */ } }
-try { history.replaceState({ app: 'root' }, ''); } catch { /* */ }
-pushGuard();
-window.addEventListener('popstate', () => {
-  if (S.sheet) { S.sheet = null; render(); pushGuard(); return; }
-  if (S.swiped) { S.swiped = null; render(); pushGuard(); return; }
+let histDepth = 0, ignorePops = 0, rootGuard = false;
+function navLevel() {
+  if (!S.user) return 0;
+  if (S.wizard) return (S.household ? 1 : 0) + (S.wizard.step === 2 ? 1 : 0);
+  if (!S.household) return 0;
+  let l = 0;
+  if (S.view === 'history') l = 2;
+  else if (S.view !== 'list') l = 1;
+  if (S.page) l += 1;
+  if (S.sheet) l += 1;
+  return l;
+}
+function syncHistory() {
+  const level = navLevel();
+  try {
+    if (level > histDepth) {
+      for (let i = histDepth; i < level; i++) history.pushState({ app: 'nav' }, '');
+      histDepth = level;
+    } else if (level < histDepth) {
+      const n = histDepth - level;
+      histDepth = level;
+      ignorePops++;
+      history.go(-n);
+    }
+  } catch { /* */ }
+}
+function stepBack() {
+  if (S.sheet) { S.sheet = null; return; }
   if (S.wizard) {
     if (S.wizard.step === 2) S.wizard.step = 1;
-    else if (S.wizard.step === 1 && S.household) S.wizard = null;
-    render(); pushGuard(); return;
+    else if (S.household) S.wizard = null;
+    return;
   }
-  if (S.household) {
-    if (S.page) { S.page = null; render(); pushGuard(); return; }
-    if (S.view === 'history') { S.view = 'settings'; render(); pushGuard(); return; }
-    if (S.view !== 'list') { S.view = 'list'; window.scrollTo(0, 0); render(); pushGuard(); return; }
+  if (S.page) { S.page = null; return; }
+  if (S.view === 'history') { S.view = 'settings'; return; }
+  if (S.view !== 'list') { S.view = 'list'; window.scrollTo(0, 0); }
+}
+document.addEventListener('pointerdown', () => {
+  if (!rootGuard && histDepth === 0 && S.user) {
+    try { history.pushState({ app: 'root' }, ''); rootGuard = true; } catch { /* */ }
   }
-  // Op het hoofdscherm: pas bij een tweede druk binnen 2 seconden afsluiten
-  if (Date.now() - lastBackAt < 2000) { history.back(); return; }
-  lastBackAt = Date.now();
-  pushGuard();
-  toast('Druk nog eens op terug om de app te sluiten');
+}, true);
+window.addEventListener('popstate', () => {
+  if (ignorePops > 0) { ignorePops--; return; }
+  S.swiped = null;
+  if (histDepth > 0) { histDepth--; stepBack(); render(); return; }
+  if (rootGuard) { rootGuard = false; toast('Druk nog eens op terug om de app te sluiten'); }
 });
 
 if ('serviceWorker' in navigator) {

@@ -1,6 +1,6 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.2.3';
+const VERSION = 'v1.2.4';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [
