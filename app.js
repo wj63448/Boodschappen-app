@@ -1938,6 +1938,7 @@ function navLevel() {
 function syncHistory() {
   const level = navLevel();
   try {
+    if (level > histDepth && !rootGuard && histDepth === 0) ensureRootGuard();
     if (level > histDepth) {
       for (let i = histDepth; i < level; i++) history.pushState({ app: 'nav' }, '');
       histDepth = level;
@@ -1960,11 +1961,14 @@ function stepBack() {
   if (S.view === 'history') { S.view = 'settings'; return; }
   if (S.view !== 'list') { S.view = 'list'; window.scrollTo(0, 0); }
 }
-document.addEventListener('pointerdown', () => {
-  if (!rootGuard && histDepth === 0 && S.user) {
-    try { history.pushState({ app: 'root' }, ''); rootGuard = true; } catch { /* */ }
-  }
-}, true);
+// Op een telefoon telt een aanraking pas als "tik" bij het loslaten (click / touchend),
+// niet bij pointerdown. Alleen dan aanvaardt Chrome de extra terug-stap.
+function ensureRootGuard() {
+  if (rootGuard || histDepth !== 0 || !S.user) return;
+  if (navigator.userActivation && !navigator.userActivation.isActive) return;
+  try { history.pushState({ app: 'root' }, ''); rootGuard = true; } catch { /* */ }
+}
+['click', 'touchend', 'keydown'].forEach((ev) => document.addEventListener(ev, ensureRootGuard, true));
 window.addEventListener('popstate', () => {
   if (ignorePops > 0) { ignorePops--; return; }
   S.swiped = null;
