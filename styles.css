@@ -106,9 +106,8 @@ label.lbl { display: flex; flex-direction: column; gap: 6px; font-size: 15px; fo
 .seg button { height: 38px; border-radius: 9px; border: none; background: transparent; color: var(--ink-2); font-weight: 600; font-size: 15px; }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(30,42,34,.18); }
 
-.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-.chips::-webkit-scrollbar { display: none; }
-.chip { flex: none; height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--field); background: var(--card); font-size: 14px; font-weight: 600; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { flex: none; min-height: 38px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 0 14px; border-radius: 999px; border: 1px solid var(--field); background: var(--card); font-size: 14px; font-weight: 600; white-space: nowrap; }
 .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chip.dashed { border-style: dashed; border-color: var(--muted-box); background: transparent; font-weight: 500; }
 

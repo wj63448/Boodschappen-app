@@ -1095,10 +1095,13 @@ function renderAdd() {
     h('h1', { class: 'title' }, 'Toevoegen'),
     h('label', { class: 'search' }, icon('search', 20, 'var(--ink-3)'),
       h('input', { 'data-key': 'search', placeholder: 'Zoek in catalogus…', 'aria-label': 'Zoek in catalogus', value: S.search, oninput: (e) => { S.search = e.target.value; render(); } }),
-      S.search ? h('button', { class: 'iconbtn plain', style: { width: '32px', height: '32px' }, 'aria-label': 'Wissen', onclick: (e) => { e.preventDefault(); S.search = ''; render(); } }, icon('x', 16)) : null),
-    !q && cats.length > 1 ? h('div', { class: 'chips' }, cats.map((c) => h('button', { class: 'chip' + (S.chip === c ? ' on' : ''), onclick: () => { S.chip = c; render(); } }, c))) : null);
+      S.search ? h('button', { class: 'iconbtn plain', style: { width: '32px', height: '32px' }, 'aria-label': 'Wissen', onclick: (e) => { e.preventDefault(); S.search = ''; render(); } }, icon('x', 16)) : null));
 
   const main = h('div', { class: 'main' });
+  if (!q && cats.length > 1) {
+    main.append(h('section', { class: 'section' }, h('h2', { class: 'group-h' }, 'Afdeling'),
+      h('div', { class: 'chips', role: 'group', 'aria-label': 'Afdeling kiezen' }, cats.map((c) => h('button', { class: 'chip' + (S.chip === c ? ' on' : ''), 'aria-pressed': String(S.chip === c), onclick: () => { S.chip = c; render(); } }, c)))));
+  }
   if (!q && basis.length) {
     main.append(h('button', { class: 'btn block', style: { borderStyle: 'dashed', borderColor: 'var(--accent)', color: 'var(--accent-ink)' }, disabled: !basisMissing.length, onclick: () => {
       for (const c of basisMissing) stageEntry({ name: c.name, unit: c.unit, category: c.category, catalogId: c.id, photo: c.photo || '', qty: c.std || 1 });
