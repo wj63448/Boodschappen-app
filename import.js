@@ -24,7 +24,9 @@ const SYN = {
   shop: ['winkel', 'winkels'],
   order: ['volgorde', 'positie', 'route'],
   card: ['kaartnummer', 'kaart', 'klantenkaart', 'kaartnr'],
-  holder: ['op naam van', 'naam', 'eigenaar', 'houder']
+  holder: ['op naam van', 'naam', 'eigenaar', 'houder'],
+  format: ['type', 'weergave', 'formaat', 'code'],
+  qrtext: ['qr-inhoud', 'qr inhoud', 'inhoud qr', 'qr-tekst']
 };
 
 function roleOf(h, kind) {
@@ -33,7 +35,7 @@ function roleOf(h, kind) {
   const order = kind === 'dish'
     ? ['dish', 'article', 'qty', 'unit', 'category', 'photo', 'nr', 'link']
     : kind === 'card'
-      ? ['shop', 'card', 'holder']
+      ? ['shop', 'card', 'holder', 'format', 'qrtext']
       : ['article', 'category', 'unit', 'std', 'basis', 'photo', 'nr', 'link', 'dish', 'shop', 'order', 'card', 'qty'];
   for (const r of order) if (SYN[r].includes(k)) return r;
   return null;
@@ -187,7 +189,8 @@ export function parseImport(sheets) {
         const shop = text(row[cols.shop]);
         const nr = nrText(row[cols.card]).replace(/\s/g, '');
         if (!shop || !/\d{4,}/.test(nr)) continue;
-        out.cards.push({ shop, number: nr, holder: cols.holder != null ? text(row[cols.holder]) : '' });
+        const f = key(row[cols.format]);
+        out.cards.push({ shop, number: nr, holder: cols.holder != null ? text(row[cols.holder]) : '', format: f.startsWith('qr') ? 'qr' : 'barcode', qrText: cols.qrtext != null ? text(row[cols.qrtext]) : '' });
         if (/^\d{12}$/.test(nr)) out.warnings.push(`Kaartnummer ${shop} heeft 12 cijfers: controleer of er een 0 vooraan ontbreekt (zet de cel dan op Tekst).`);
         n++;
       }

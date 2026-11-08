@@ -713,7 +713,8 @@ function doRender() {
 
   if (S.sheet) root.append(renderSheet());
   if (S.toast) {
-    root.append(h('div', { class: 'toast', role: 'status' },
+    const firstToast = !S.toast._shown; S.toast._shown = true;
+    root.append(h('div', { class: 'toast' + (firstToast ? ' anim' : ''), role: 'status' },
       h('span', {}, S.toast.text),
       S.toast.undo ? h('button', { onclick: () => { const u = S.toast.undo; S.toast = null; clearTimeout(toastTimer); u(); render(); } }, 'Ongedaan maken') : null));
   }
@@ -1195,22 +1196,50 @@ let barcodeLib = null;
 function loadScript(src) {
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.append(s); });
 }
+let qrLib = null;
+function loadQr() {
+  if (window.qrcode) return Promise.resolve();
+  return (qrLib ||= loadScript('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js')
+    .catch(() => loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js')));
+}
+function cardFormat(card) { return (S.cardFmt && S.cardFmt[card.id]) || card.format || 'barcode'; }
 function renderCards() {
   const sel = Math.min(S.cardSel || 0, Math.max(0, S.cards.length - 1));
   const card = S.cards[sel];
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Streepjescode');
+  const box = h('div', { class: 'barcode', style: { width: '100%', minHeight: '140px', alignItems: 'center' } });
+  let fmt = 'barcode';
   if (card) {
-    const draw = () => {
-      try {
-        const digits = String(card.number).replace(/\s/g, '');
-        const fmt = /^\d{13}$/.test(digits) ? 'EAN13' : 'CODE128';
-        window.JsBarcode(svg, digits, { format: fmt, width: 2.4, height: 110, displayValue: true, fontSize: 18, margin: 0 });
-      } catch { svg.replaceWith(h('div', { class: 'muted' }, 'Ongeldig kaartnummer')); }
-    };
-    if (window.JsBarcode) setTimeout(draw);
-    else (barcodeLib ||= loadScript('https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js')).then(draw).catch(() => {});
+    fmt = cardFormat(card);
+    const digits = String(card.number).replace(/\s/g, '');
+    if (fmt === 'qr') {
+      const content = (card.qrText || '').trim() || digits;
+      loadQr().then(() => {
+        try {
+          const qr = window.qrcode(0, 'M');
+          qr.addData(content);
+          qr.make();
+          box.innerHTML = qr.createSvgTag(8, 2);
+          const svgEl = box.querySelector('svg');
+          if (svgEl) { svgEl.setAttribute('role', 'img'); svgEl.setAttribute('aria-label', 'QR-code van de klantenkaart'); svgEl.style.width = '240px'; svgEl.style.height = '240px'; svgEl.style.maxWidth = '100%'; }
+          box.append(h('div', { class: 'small muted center', style: { width: '100%' } }, digits));
+          box.style.flexDirection = 'column'; box.style.gap = '8px';
+        } catch { box.textContent = 'QR-code kon niet gemaakt worden'; }
+      }).catch(() => { box.textContent = 'QR-code laden mislukt. Controleer je internetverbinding.'; });
+    } else {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Streepjescode');
+      box.append(svg);
+      const draw = () => {
+        try {
+          const bfmt = /^\d{13}$/.test(digits) ? 'EAN13' : 'CODE128';
+          window.JsBarcode(svg, digits, { format: bfmt, width: 2.4, height: 110, displayValue: true, fontSize: 18, margin: 0 });
+        } catch { svg.replaceWith(h('div', { class: 'muted' }, 'Ongeldig kaartnummer')); }
+      };
+      if (window.JsBarcode) setTimeout(draw);
+      else (barcodeLib ||= loadScript('https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js')).then(draw).catch(() => {});
+    }
   }
+  const setFmt = (f) => { S.cardFmt = { ...(S.cardFmt || {}), [card.id]: f }; render(); };
   return h('div', {},
     h('div', { class: 'top' }, h('div', { class: 'row' }, h('button', { class: 'iconbtn plain', 'aria-label': 'Terug', onclick: () => { S.view = 'list'; render(); } }, icon('back', 22)), h('h1', { class: 'title' }, 'Klantenkaarten'))),
     h('div', { class: 'main' },
@@ -1218,9 +1247,12 @@ function renderCards() {
         h('div', { class: 'chips', role: 'tablist' }, S.cards.map((c, i) => h('button', { class: 'chip' + (i === sel ? ' on' : ''), role: 'tab', 'aria-selected': String(i === sel), style: { height: '44px' }, onclick: () => { S.cardSel = i; render(); } }, c.shop))),
         h('div', { class: 'card pad col', style: { alignItems: 'center', gap: '14px', padding: '24px 16px' } },
           h('div', { class: 'title', style: { fontSize: '24px' } }, card.shop),
-          h('div', { class: 'barcode', style: { width: '100%' } }, svg),
+          box,
           card.holder ? h('div', { class: 'muted' }, 'Op naam van ' + card.holder) : null),
-        h('p', { class: 'small muted' }, 'Tip: zet je scherm helder voor het scannen aan de kassa.')
+        h('div', { class: 'seg', role: 'group', 'aria-label': 'Weergave' },
+          h('button', { class: fmt === 'barcode' ? 'on' : '', 'aria-pressed': String(fmt === 'barcode'), onclick: () => setFmt('barcode') }, 'Streepjescode'),
+          h('button', { class: fmt === 'qr' ? 'on' : '', 'aria-pressed': String(fmt === 'qr'), onclick: () => setFmt('qr') }, 'QR-code')),
+        h('p', { class: 'small muted' }, 'Tip: zet je scherm helder voor het scannen aan de kassa. Lukt het ene niet, probeer dan het andere.')
       ]));
 }
 
@@ -1619,7 +1651,8 @@ function renderSheet() {
   let body;
   try { body = sheetBody(sh); } catch (e) { console.error(e); body = null; }
   if (!body) { S.sheet = null; return h('span'); }
-  const overlay = h('div', { class: 'overlay', onclick: (e) => { if (e.target === overlay) closeSheet(); } },
+  const first = !sh._shown; sh._shown = true;
+  const overlay = h('div', { class: 'overlay' + (first ? ' anim' : ''), onclick: (e) => { if (e.target === overlay) closeSheet(); } },
     h('section', { class: 'sheet', role: 'dialog', 'aria-modal': 'true' }, h('div', { class: 'grip' }), body));
   return overlay;
 }
@@ -1827,7 +1860,7 @@ function sheetCardEdit(sh) {
   return h('form', { class: 'col', style: { gap: '12px' }, onsubmit: (e) => {
     e.preventDefault();
     if (!d.shop.trim() || !String(d.number).trim()) { toast('Vul winkel en kaartnummer in'); return; }
-    const data = { shop: d.shop.trim(), number: String(d.number).replace(/\s/g, ''), holder: (d.holder || '').trim() };
+    const data = { shop: d.shop.trim(), number: String(d.number).replace(/\s/g, ''), holder: (d.holder || '').trim(), format: d.format === 'qr' ? 'qr' : 'barcode', qrText: (d.qrText || '').trim() };
     bg(sh.id ? setDoc(hhRef('cards', sh.id), data) : setDoc(doc(hhCol('cards')), data));
     closeSheet();
   } },
@@ -1836,6 +1869,13 @@ function sheetCardEdit(sh) {
       h('datalist', { id: 'shoplist' }, [...new Set([...(S.household.shops || []), ...SHOPS])].map((s) => h('option', { value: s })))),
     h('label', { class: 'lbl' }, 'Kaartnummer (cijfers onder de streepjescode)', h('input', { class: 'field', 'data-key': 'cd-nr', inputmode: 'numeric', value: d.number, oninput: (e) => { d.number = e.target.value; } })),
     h('label', { class: 'lbl' }, 'Op naam van (optioneel)', h('input', { class: 'field', 'data-key': 'cd-holder', value: d.holder, oninput: (e) => { d.holder = e.target.value; } })),
+    h('div', { class: 'col', style: { gap: '6px' } }, h('span', { class: 'bold', style: { fontSize: '15px' } }, 'Tonen aan de kassa als'),
+      h('div', { class: 'seg' },
+        h('button', { type: 'button', class: d.format !== 'qr' ? 'on' : '', onclick: () => { d.format = 'barcode'; render(); } }, 'Streepjescode'),
+        h('button', { type: 'button', class: d.format === 'qr' ? 'on' : '', onclick: () => { d.format = 'qr'; render(); } }, 'QR-code'))),
+    d.format === 'qr' ? h('label', { class: 'lbl' }, 'Inhoud van de QR-code (optioneel)',
+      h('input', { class: 'field', 'data-key': 'cd-qr', value: d.qrText || '', placeholder: 'leeg = het kaartnummer', oninput: (e) => { d.qrText = e.target.value; } }),
+      h('span', { class: 'small muted', style: { fontWeight: 400 } }, 'Toont de app van de winkel een QR-code met een andere inhoud? Scan die met de camera van een ander toestel en plak hier wat je ziet.')) : null,
     h('button', { class: 'btn primary big block', type: 'submit' }, 'Bewaren'),
     sh.id ? h('button', { class: 'btn danger block', type: 'button', onclick: () => { if (confirm('Kaart verwijderen?')) { bg(deleteDoc(hhRef('cards', sh.id))); closeSheet(); } } }, 'Verwijderen') : null);
 }

@@ -1,6 +1,6 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.1.2';
+const VERSION = 'v1.2.0';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [
@@ -22,7 +22,8 @@ const EXTERNAL = [
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js',
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js',
   'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js',
+  'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js'
 ];
 
 self.addEventListener('install', (event) => {

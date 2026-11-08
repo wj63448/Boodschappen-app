@@ -152,8 +152,10 @@ label.lbl { display: flex; flex-direction: column; gap: 6px; font-size: 15px; fo
 .banner .grow b { display: block; }
 
 /* ---------- Sheets ---------- */
-.overlay { position: fixed; inset: 0; background: rgba(20,26,22,.55); z-index: 50; display: flex; align-items: flex-end; justify-content: center; animation: fade .15s ease; }
-.sheet { width: 100%; max-width: 560px; max-height: 92vh; max-height: 92dvh; overflow-y: auto; background: var(--card); border-radius: 22px 22px 0 0; padding: 12px 20px calc(24px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 16px; animation: up .2s ease; }
+.overlay { position: fixed; inset: 0; background: rgba(20,26,22,.55); z-index: 50; display: flex; align-items: flex-end; justify-content: center; }
+.overlay.anim { animation: fade .15s ease; }
+.sheet { width: 100%; max-width: 560px; max-height: 92vh; max-height: 92dvh; overflow-y: auto; background: var(--card); border-radius: 22px 22px 0 0; padding: 12px 20px calc(24px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 16px; }
+.overlay.anim .sheet { animation: up .2s ease; }
 .grip { align-self: center; width: 40px; height: 5px; border-radius: 3px; background: var(--field); flex: none; }
 .sheet h2 { font-family: var(--display); font-size: 24px; font-weight: 700; }
 .bigphoto { height: 230px; border-radius: 16px; background: #F4F1EA; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
@@ -168,7 +170,8 @@ label.lbl { display: flex; flex-direction: column; gap: 6px; font-size: 15px; fo
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---------- Toast ---------- */
-.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + var(--safe-bottom)); width: calc(100% - 32px); max-width: 528px; background: var(--ink); color: #F6F4EE; border-radius: 14px; padding: 0 8px 0 16px; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; box-shadow: 0 6px 20px rgba(20,26,22,.25); z-index: 60; animation: up .2s ease; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + var(--safe-bottom)); width: calc(100% - 32px); max-width: 528px; background: var(--ink); color: #F6F4EE; border-radius: 14px; padding: 0 8px 0 16px; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 8px; box-shadow: 0 6px 20px rgba(20,26,22,.25); z-index: 60; }
+.toast.anim { animation: up .2s ease; }
 .toast button { height: 44px; padding: 0 12px; border: none; background: transparent; color: #9FD8B0; font-weight: 600; }
 
 /* ---------- Wizard / welcome ---------- */
