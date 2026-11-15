@@ -316,6 +316,14 @@ const realRole = () => S.household?.members?.[uid()] || null;
 const role = () => (S.viewAs ? S.viewAs : realRole());
 const isAdmin = () => role() === 'admin';
 const canShop = () => role() === 'admin' || role() === 'shopper';
+// Eigenaar van de app, maar niet tijdens een testweergave
+const ownerView = () => S.isOwner && !S.viewAs;
+// Definitieve acties kunnen niet in een testweergave
+function blockedInTest() {
+  if (!S.viewAs) return false;
+  toast('Dit kan niet in de testweergave. Tik bovenaan op Stoppen.');
+  return true;
+}
 const ROLE_LABEL = { admin: 'beheerder', shopper: 'winkelaar', member: 'lid' };
 const ROLE_LABEL_CAP = { admin: 'Beheerder', shopper: 'Winkelaar', member: 'Lid' };
 const AVATAR_COLORS = ['#2F6B45', '#1F5C8A', '#9A4A1A', '#6B4A8C', '#7A5A12', '#8A2F4A', '#2F6B6B'];
@@ -544,6 +552,7 @@ function accessPanel() {
     h('button', { class: 'btn primary big block', type: 'submit' }, 'Toegang aanvragen'));
 }
 async function decideRequest(r, approve) {
+  if (blockedInTest()) return;
   try {
     await updateDoc(doc(db, 'accessRequests', r.id), { status: approve ? 'approved' : 'rejected', decidedAt: serverTimestamp() });
     S.ownerDecided = [{ ...r, status: approve ? 'approved' : 'rejected' }, ...S.ownerDecided].slice(0, 10);
@@ -560,6 +569,7 @@ async function loadOwnerHouseholds() {
   render();
 }
 async function setHouseholdBlocked(hhItem, blocked) {
+  if (blockedInTest()) return;
   if (blocked && !confirm(`${hhItem.name} blokkeren? De leden kunnen de lijst dan niet meer gebruiken tot je het gezin weer vrijgeeft.`)) return;
   try {
     await updateDoc(doc(db, 'households', hhItem.id), { blocked });
@@ -1149,7 +1159,7 @@ function renderApp() {
       S.view === 'add' ? renderAddFooter() : null,
       h('nav', { class: 'tabs', style: { '--n': tabs.length } }, tabs.map(([v, label, ic]) =>
         h('button', { class: (S.view === v || (v === 'settings' && ['cards', 'history'].includes(S.view)) ? 'on' : ''), 'aria-current': S.view === v ? 'page' : null, onclick: () => { S.view = v; S.page = null; S.swiped = null; window.scrollTo(0, 0); render(); } },
-          h('span', { style: { position: 'relative', display: 'inline-flex' } }, icon(ic, 24), v === 'settings' && S.isOwner && S.ownerRequests.length ? h('span', { class: 'tabdot', 'aria-label': 'nieuwe aanvragen' }) : null), label)))));
+          h('span', { style: { position: 'relative', display: 'inline-flex' } }, icon(ic, 24), v === 'settings' && ownerView() && S.ownerRequests.length ? h('span', { class: 'tabdot', 'aria-label': 'nieuwe aanvragen' }) : null), label)))));
 }
 
 function headerBlock(title, extra) {
@@ -1186,7 +1196,7 @@ function renderList() {
       h('button', { class: 'btn sm soft', style: { height: '44px', borderRadius: '12px' }, onclick: announceShopping }, icon('bell', 18, 'var(--accent-ink)'), 'Ik ga winkelen'),
       S.cards.length ? h('button', { class: 'iconbtn', 'aria-label': 'Klantenkaarten', onclick: () => { S.view = 'cards'; render(); } }, icon('card', 20, 'var(--ink-2)')) : null) :
       S.cards.length ? h('div', { class: 'row' }, h('button', { class: 'btn sm grow', style: { height: '44px', borderRadius: '12px', fontSize: '14px' }, onclick: () => { S.view = 'cards'; render(); } }, icon('card', 18, 'var(--ink-2)'), 'Klantenkaarten')) : null,
-    S.isOwner && S.ownerRequests.length ? h('button', { class: 'banner', style: { border: 'none', textAlign: 'left', width: '100%' }, onclick: () => { S.view = 'settings'; S.page = 'owner'; S.ownerHouseholds = null; render(); } }, icon('bell', 22, '#1F4E79'),
+    ownerView() && S.ownerRequests.length ? h('button', { class: 'banner', style: { border: 'none', textAlign: 'left', width: '100%' }, onclick: () => { S.view = 'settings'; S.page = 'owner'; S.ownerHouseholds = null; render(); } }, icon('bell', 22, '#1F4E79'),
       h('div', { class: 'grow' }, h('b', {}, `${S.ownerRequests.length} nieuwe toegangsaanvraag${S.ownerRequests.length === 1 ? '' : 'en'}`), S.ownerRequests.map((r) => r.name).join(', '))) : null,
     !shopper ? h('div', { class: 'card', style: { padding: '10px 12px', fontSize: '14px', color: 'var(--ink-2)' } }, 'Je eigen lijnen herken je aan het potloodje. Tik erop om aan te passen, of veeg naar links om te wissen.') : null,
     showEvent ? h('div', { class: 'banner' }, icon('bell', 22, '#1F4E79'),
@@ -1551,7 +1561,7 @@ function renderSettings() {
     h('div', { class: 'main' },
       h('div', { class: 'card pad row' },
         h('div', { class: 'avatar', style: { background: avatarColor(uid()), width: '44px', height: '44px', fontSize: '17px' } }, nameOf(uid())[0]),
-        h('div', { class: 'grow col', style: { gap: '1px' } }, h('div', { class: 'bold' }, nameOf(uid())), h('div', { class: 'small muted' }, `${S.user.email} · ${ROLE_LABEL[realRole()]} in ${S.household.name}`))),
+        h('div', { class: 'grow col', style: { gap: '1px' } }, h('div', { class: 'bold' }, nameOf(uid())), h('div', { class: 'small muted' }, `${S.user.email} · ${ROLE_LABEL[role()]} in ${S.household.name}`))),
       admin ? h('div', { class: 'list' },
         nav('Leden & uitnodigingen', `${memberCount} ${memberCount === 1 ? 'lid' : 'leden'}`, 'members', 'join'),
         nav('Winkels & looproute', (S.household.shops || []).join(', ') || 'nog geen winkels', 'shops', 'route'),
@@ -1562,14 +1572,14 @@ function renderSettings() {
       shopper ? h('div', { class: 'list' },
         nav('Recent gekocht & gewist', 'terugzetten wat per ongeluk weg is', 'history', 'clock'),
         S.cards.length ? nav('Klantenkaarten tonen', null, 'cards', 'card') : null) : null,
-      S.isOwner ? h('div', { class: 'list' },
+      ownerView() ? h('div', { class: 'list' },
         h('button', { class: 'navrow', onclick: () => { S.page = 'owner'; S.ownerHouseholds = null; window.scrollTo(0, 0); render(); } },
           icon('shield', 22, 'var(--ink-2)'), h('div', { class: 'grow' }, h('span', { class: 'bold' }, 'App-beheer'), h('span', { class: 'small muted' }, 'toegangsaanvragen en gezinnen')),
           S.ownerRequests.length ? h('span', { class: 'reddot' }, String(S.ownerRequests.length)) : null, icon('right', 18, 'var(--ink-3)'))) : null,
       h('div', { class: 'list' },
         FEATURES.multiHousehold ? nav('Gezin wisselen of toevoegen', `${(S.profile.households || []).length} ${(S.profile.households || []).length === 1 ? 'gezin' : 'gezinnen'}`, 'households', 'home') : null,
         nav('Meldingen', 'Notification' in window ? ({ granted: 'aan', denied: 'geblokkeerd in je browser', default: 'uit' }[Notification.permission]) : 'niet ondersteund op dit toestel', 'notify', 'bell'),
-        realRole() !== 'member' ? nav('Bekijk als…', 'testweergave voor een andere rol', 'viewas', 'user') : null,
+        realRole() !== 'member' && !S.viewAs ? nav('Bekijk als…', 'testweergave voor een andere rol', 'viewas', 'user') : null,
         nav('Account & privacy', null, 'account', 'user')),
       h('button', { class: 'btn block', onclick: () => signOut(auth) }, 'Afmelden'),
       h('button', { class: 'tiny muted center', style: { border: 'none', background: 'none', padding: '8px' }, onclick: () => { S.vtaps = (S.vtaps || 0) + 1; if (S.vtaps >= 5) { S.vtaps = 0; S.debug = !S.debug; render(); } } }, `${APP_NAME} · versie ${window.APP_VERSION || ''} · ${COPYRIGHT}`),
@@ -1611,6 +1621,7 @@ function pageMembers() {
         onchange: (e) => bg(updateDoc(hhRef(), { ['members.' + u]: e.target.value })) },
         ['admin', 'shopper', 'member'].map((x) => h('option', { value: x, selected: x === r ? true : null }, ROLE_LABEL_CAP[x]))),
       u !== uid() ? h('button', { class: 'iconbtn plain', 'aria-label': `${nameOf(u)} uit het gezin verwijderen`, onclick: () => {
+        if (blockedInTest()) return;
         if (!confirm(`${nameOf(u)} uit het gezin verwijderen?`)) return;
         bg(updateDoc(hhRef(), { ['members.' + u]: deleteField() }));
       } }, icon('trash', 18, 'var(--ink-3)')) : null))),
@@ -1728,15 +1739,16 @@ function pageHouseholds() {
       h('input', { class: 'field', 'data-key': 'hhcode', placeholder: 'Uitnodigingscode', 'aria-label': 'Uitnodigingscode', style: { textTransform: 'uppercase' }, value: S.form.hhcode || '', oninput: (e) => { S.form.hhcode = e.target.value; } }),
       h('button', { class: 'btn dark', type: 'submit' }, 'Doe mee')),
     h('section', { class: 'section', style: { marginTop: '12px' } }, h('h2', { class: 'group-h' }, S.household.name),
-      realRole() === 'admin' && !others.length
+      role() === 'admin' && !others.length
         ? h('button', { class: 'btn danger block', onclick: deleteHouseholdFlow }, 'Gezin verwijderen')
-        : realRole() === 'admin' && !otherAdmins.length
+        : role() === 'admin' && !otherAdmins.length
           ? h('div', { class: 'small muted' }, 'Je bent de enige beheerder. Maak eerst iemand anders beheerder voor je het gezin verlaat, of verwijder de andere leden om het gezin te verwijderen.')
           : h('button', { class: 'btn danger block', onclick: leaveHouseholdFlow }, 'Dit gezin verlaten'),
-      realRole() === 'admin' && others.length ? h('button', { class: 'btn danger block', onclick: deleteHouseholdFlow }, 'Gezin verwijderen (voor iedereen)') : null)));
+      role() === 'admin' && others.length ? h('button', { class: 'btn danger block', onclick: deleteHouseholdFlow }, 'Gezin verwijderen (voor iedereen)') : null)));
 }
 
 async function leaveHouseholdFlow() {
+  if (blockedInTest()) return;
   if (!confirm(`Wil je ${S.household.name} verlaten?`)) return;
   const hid = S.hid, me = uid();
   try {
@@ -1750,6 +1762,7 @@ async function leaveHouseholdFlow() {
 }
 
 async function deleteHouseholdFlow() {
+  if (blockedInTest()) return;
   if (!confirm(`${S.household.name} definitief verwijderen? De lijst, catalogus en historiek gaan verloren voor alle leden.`)) return;
   const hid = S.hid, me = uid();
   try {
@@ -1815,7 +1828,7 @@ function pageAccount() {
 
 // ---------- App-beheer (enkel de eigenaar) ----------
 function pageOwner() {
-  if (!S.isOwner) { S.page = null; return renderSettings(); }
+  if (!ownerView()) { S.page = null; return renderSettings(); }
   if (S.ownerHouseholds === null) { S.ownerHouseholds = undefined; loadOwnerHouseholds(); }
   const reqs = S.ownerRequests;
   const hhs = S.ownerHouseholds || [];
@@ -1845,6 +1858,7 @@ function pageOwner() {
 }
 
 async function deleteAccountFlow() {
+  if (blockedInTest()) return;
   if (!confirm('Je account en je gegevens definitief verwijderen?')) return;
   const me = uid();
   try {
