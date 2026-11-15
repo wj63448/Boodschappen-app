@@ -1,5 +1,7 @@
 // =====================================================================
 //  Boodschappen – gezinsapp (PWA + Firebase)
+//  © 2026 Wouter Janssens. Alle rechten voorbehouden.
+//  Contact: wj.apps.store@gmail.com
 // =====================================================================
 import { firebaseConfig, FEATURES, APP_NAME } from './config.js';
 import { CATEGORIES, MANUAL_CATEGORY, UNITS, SHOPS, SHOP_LINKS, DEPT_PHOTOS, DEPT_COLORS, DEPT_FALLBACK, startCatalog, startDishes } from './startcatalogus.js';
@@ -11,11 +13,13 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch,
-  serverTimestamp, query, orderBy, limit, increment, arrayUnion, arrayRemove, deleteField, Timestamp
+  doc, collection, getDoc, getDocFromCache, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch,
+  serverTimestamp, query, where, orderBy, limit, increment, arrayUnion, arrayRemove, deleteField, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 const root = document.getElementById('app');
+const COPYRIGHT = '© 2026 Wouter Janssens';
+const CONTACT = 'wj.apps.store@gmail.com';
 
 // ---------------------------------------------------------------------
 //  Configuratie controleren
@@ -74,10 +78,17 @@ const S = {
   joinCode: null,
   dismissedEvent: store.get('dismissedEvent', null),
   form: {},
+  isOwner: store.get('isOwner', false),
+  myRequest: null,
+  ownerRequests: [],
+  ownerHouseholds: null,
+  ownerDecided: [],
+  dupeOk: {},
   error: null
 };
 
 let unsubs = [];
+let userUnsubs = [];
 let toastTimer = null;
 const lingerTimers = {};
 
@@ -131,6 +142,8 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  warn: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   basket: '<path d="M3 9h18l-2 10a2 2 0 0 1-2 1.6H7A2 2 0 0 1 5 19L3 9z"/><path d="M8 9l3-6"/><path d="M16 9l-3-6"/>',
   // categorie-iconen
   leaf: '<path d="M5 19c0-8 5-14 14-14 0 9-6 14-14 14z"/><path d="M5 19l8-8"/>',
@@ -387,9 +400,9 @@ function hhCol(name) { return collection(db, 'households', S.hid, name); }
 // ---------------------------------------------------------------------
 //  Toast & sheets
 // ---------------------------------------------------------------------
-function toast(text, undo) {
+function toast(text, undo, label) {
   clearTimeout(toastTimer);
-  S.toast = { text, undo };
+  S.toast = { text, undo, label };
   render();
   toastTimer = setTimeout(() => { S.toast = null; render(); }, undo ? 6000 : 3500);
 }
@@ -431,17 +444,25 @@ getRedirectResult(auth).catch((e) => { if (e) { S.error = 'Aanmelden lukte niet:
 onAuthStateChanged(auth, async (user) => {
   S.user = user;
   stopSubs();
-  S.household = null; S.hid = null; S.profile = null;
+  userUnsubs.forEach((u) => { try { u(); } catch { /* */ } }); userUnsubs = [];
+  S.household = null; S.hid = null; S.profile = null; S.myRequest = null; S.ownerRequests = [];
   if (!user) { S.booting = false; render(); return; }
   S.booting = true; render();
   try {
     const ref = doc(db, 'users', user.uid);
-    let snap = await getDoc(ref).catch(() => null);
+    // Eerst het bewaarde profiel (snel, ook zonder netwerk); daarna op de achtergrond bijwerken
+    let snap = await getDocFromCache(ref).catch(() => null);
+    if (snap && snap.exists()) {
+      getDoc(ref).then((fresh) => { if (fresh.exists() && S.profile) { S.profile = { ...S.profile, ...fresh.data() }; loadHouseholdNames(); } }).catch(() => {});
+    } else {
+      snap = await getDoc(ref).catch(() => null);
+    }
     if (!snap || !snap.exists()) {
       await setDoc(ref, { name: user.displayName || '', email: user.email || '', households: [], createdAt: serverTimestamp() }, { merge: true });
       snap = await getDoc(ref);
     }
     S.profile = snap.data();
+    watchAccess(user);
     if (S.joinCode) { await joinWithCode(S.joinCode); }
     const list = S.profile.households || [];
     const pick = (S.profile.lastHousehold && list.includes(S.profile.lastHousehold)) ? S.profile.lastHousehold : list[0];
@@ -452,6 +473,92 @@ onAuthStateChanged(auth, async (user) => {
     S.booting = false; S.error = 'Laden mislukt: ' + (e.message || e.code); render();
   }
 });
+
+// ---------------------------------------------------------------------
+//  Toegang: aanvragen (nieuwe gezinnen) en app-beheer (eigenaar)
+// ---------------------------------------------------------------------
+function watchAccess(user) {
+  // eigen aanvraag (live)
+  userUnsubs.push(onSnapshot(doc(db, 'accessRequests', user.uid), (s) => {
+    S.myRequest = s.exists() ? { id: s.id, ...s.data({ serverTimestamps: 'estimate' }) } : null;
+    render();
+  }, () => {}));
+  // ben ik de eigenaar van de app? (enkel de eigenaar mag dit document lezen)
+  getDoc(doc(db, 'app', 'owner')).then(() => {
+    S.isOwner = true; store.set('isOwner', true); render();
+    userUnsubs.push(onSnapshot(query(collection(db, 'accessRequests'), where('status', '==', 'pending')), (snap) => {
+      S.ownerRequests = docsOf(snap).sort((a, b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
+      render();
+    }, () => {}));
+  }).catch((e) => {
+    if (e && e.code === 'permission-denied') { S.isOwner = false; store.set('isOwner', false); render(); }
+  });
+}
+function canCreateHousehold() { return S.isOwner || (S.myRequest && S.myRequest.status === 'approved'); }
+function startNewHousehold() {
+  if (canCreateHousehold()) { S.sheet = null; S.wizard = { step: 1, name: '', shops: ['Colruyt'], pack: 0, people: [] }; render(); }
+  else openSheet({ type: 'access' });
+}
+async function sendAccessRequest() {
+  const name = (S.form.reqname ?? firstName(S.user.displayName)).trim();
+  if (!name) { toast('Geef je naam'); return; }
+  try {
+    await setDoc(doc(db, 'accessRequests', uid()), {
+      uid: uid(), name, email: S.user.email || '', message: (S.form.reqmsg || '').trim(),
+      status: 'pending', createdAt: serverTimestamp()
+    });
+    toast('Je aanvraag is verstuurd');
+  } catch (e) { fail(e); }
+}
+function accessPanel() {
+  const r = S.myRequest;
+  if (canCreateHousehold()) {
+    return h('div', { class: 'col', style: { gap: '12px' } },
+      h('div', { class: 'banner', style: { background: 'var(--accent-soft)', color: 'var(--accent-ink)' } }, icon('check', 22, 'var(--accent-ink)'),
+        h('div', { class: 'grow' }, h('b', {}, S.isOwner ? 'Je bent de eigenaar van de app' : 'Je aanvraag is goedgekeurd!'), 'Je kunt nu een gezin aanmaken.')),
+      h('button', { class: 'btn primary big block', onclick: startNewHousehold }, 'Nieuw gezin aanmaken'));
+  }
+  if (r && r.status === 'pending') {
+    return h('div', { class: 'col', style: { gap: '10px' } },
+      h('div', { class: 'banner' }, icon('clock', 22, '#1F4E79'),
+        h('div', { class: 'grow' }, h('b', {}, 'Wacht op goedkeuring'), `Je aanvraag werd verstuurd ${fmtWhen(r.createdAt)}. Zodra ze is goedgekeurd, verandert dit scherm vanzelf.`)),
+      h('div', { class: 'small muted' }, 'Vragen? Mail naar ' + CONTACT));
+  }
+  if (r && r.status === 'rejected') {
+    return h('div', { class: 'col', style: { gap: '10px' } },
+      h('div', { class: 'banner test' }, h('div', { class: 'grow' }, h('b', {}, 'Je aanvraag werd niet goedgekeurd'), 'Neem contact op via ' + CONTACT + ' als je denkt dat dit een vergissing is.')));
+  }
+  if (S.form.reqname == null) S.form.reqname = firstName(S.user.displayName);
+  return h('form', { class: 'col', style: { gap: '12px' }, onsubmit: (e) => { e.preventDefault(); sendAccessRequest(); } },
+    h('div', { class: 'small muted' }, 'Om een nieuw gezin te starten, heb je toestemming nodig van de eigenaar van de app. Word je uitgenodigd in een bestaand gezin, dan is dit niet nodig.'),
+    h('label', { class: 'lbl' }, 'Je naam', h('input', { class: 'field', 'data-key': 'reqname', value: S.form.reqname, oninput: (e) => { S.form.reqname = e.target.value; } })),
+    h('label', { class: 'lbl' }, 'Korte boodschap (optioneel)', h('input', { class: 'field', 'data-key': 'reqmsg', value: S.form.reqmsg || '', placeholder: 'bv. Hoi Wouter, dit is Jan van de tennis', oninput: (e) => { S.form.reqmsg = e.target.value; } })),
+    h('button', { class: 'btn primary big block', type: 'submit' }, 'Toegang aanvragen'));
+}
+async function decideRequest(r, approve) {
+  try {
+    await updateDoc(doc(db, 'accessRequests', r.id), { status: approve ? 'approved' : 'rejected', decidedAt: serverTimestamp() });
+    S.ownerDecided = [{ ...r, status: approve ? 'approved' : 'rejected' }, ...S.ownerDecided].slice(0, 10);
+    if (approve) openSheet({ type: 'notifyApproved', req: r });
+    else toast(`Aanvraag van ${r.name} geweigerd`);
+  } catch (e) { fail(e); }
+}
+function appUrl() { return location.origin + location.pathname; }
+async function loadOwnerHouseholds() {
+  try {
+    const snap = await getDocs(collection(db, 'households'));
+    S.ownerHouseholds = docsOf(snap).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'nl'));
+  } catch (e) { S.ownerHouseholds = []; fail(e); }
+  render();
+}
+async function setHouseholdBlocked(hhItem, blocked) {
+  if (blocked && !confirm(`${hhItem.name} blokkeren? De leden kunnen de lijst dan niet meer gebruiken tot je het gezin weer vrijgeeft.`)) return;
+  try {
+    await updateDoc(doc(db, 'households', hhItem.id), { blocked });
+    hhItem.blocked = blocked; render();
+    toast(blocked ? `${hhItem.name} is geblokkeerd` : `${hhItem.name} is weer vrijgegeven`);
+  } catch (e) { fail(e); }
+}
 
 async function loadHouseholdNames() {
   const list = S.profile?.households || [];
@@ -496,7 +603,8 @@ async function openHousehold(hid) {
       S.hhNames[hid] = S.household.name;
       S.booting = false;
       render();
-      if (first) { first = false; resolve(); subscribeRest(hid); }
+      if (first) { first = false; resolve(); if (!S.household.blocked) subscribeRest(hid); }
+      else if (S.household.blocked) { const keep = unsubs[0]; unsubs.slice(1).forEach((u) => { try { u(); } catch { /* */ } }); unsubs = [keep]; }
     }, (e) => {
       console.warn('household', e);
       S.household = null; S.hid = null; stopSubs();
@@ -723,7 +831,7 @@ function finishShopping() {
 }
 function announceShopping() {
   bg(setDoc(doc(hhCol('events')), { type: 'shopping', by: uid(), byName: nameOf(uid()), shop: activeShop() || '', at: serverTimestamp() }));
-  toast('De anderen zien nu dat je gaat winkelen');
+  toast('Gezinsleden die de app openen, zien nu dat je gaat winkelen');
 }
 function restoreFromHistory(hx) {
   const owner = hx.addedBy || hx.by;
@@ -758,13 +866,19 @@ function commitStaged() {
   }
   bg(b.commit());
   const n = entries.length;
-  S.staged = {}; S.noteOpen = null; S.search = '';
-  S.view = 'list';
-  toast(`${n} ${n === 1 ? 'artikel' : 'artikelen'} op de lijst gezet`);
+  S.staged = {}; S.noteOpen = null; S.search = ''; S.dupeOk = {};
+  toast(`${n} ${n === 1 ? 'artikel' : 'artikelen'} op de lijst gezet`, () => { S.view = 'list'; window.scrollTo(0, 0); render(); }, 'Bekijk lijst');
 }
 function stageKey(name, unit) { return norm(name) + '|' + (unit || ''); }
+function openItemFor(name, unit) {
+  return S.items.find((i) => i.status === 'open' && norm(i.name) === norm(name) && (unit == null || (i.unit || '') === (unit || '')));
+}
 function stageCatalog(c, delta) {
   const k = stageKey(c.name, c.unit);
+  if (delta > 0 && !(S.staged[k] && S.staged[k].qty > 0) && !S.dupeOk[k]) {
+    const ex = openItemFor(c.name, c.unit);
+    if (ex) { openSheet({ type: 'dupe', item: ex.id, onYes: () => { S.dupeOk[k] = true; stageCatalog(c, 1); } }); return; }
+  }
   const cur = S.staged[k] || { name: c.name, unit: c.unit, category: c.category, catalogId: c.id, photo: c.photo || '', note: '', qty: 0 };
   let q = cur.qty;
   if (delta > 0) q = q === 0 ? (c.std || stepFor(c.unit)) : q + stepFor(c.unit);
@@ -819,7 +933,7 @@ function doRender() {
     const firstToast = !S.toast._shown; S.toast._shown = true;
     root.append(h('div', { class: 'toast' + (firstToast ? ' anim' : ''), role: 'status' },
       h('span', {}, S.toast.text),
-      S.toast.undo ? h('button', { onclick: () => { const u = S.toast.undo; S.toast = null; clearTimeout(toastTimer); u(); render(); } }, 'Ongedaan maken') : null));
+      S.toast.undo ? h('button', { onclick: () => { const u = S.toast.undo; S.toast = null; clearTimeout(toastTimer); u(); render(); } }, S.toast.label || 'Ongedaan maken') : null));
   }
 
   if (focusKey) {
@@ -846,7 +960,11 @@ function renderLogin() {
     h('div', { class: 'col', style: { gap: '14px' } },
       S.error ? h('div', { class: 'banner test' }, S.error) : null,
       h('button', { class: 'btn big block', onclick: login, html: '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.3z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z"/><path fill="#FBBC05" d="M6.4 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2V7.4H3.1a10 10 0 0 0 0 9.2L6.4 14z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.9A10 10 0 0 0 3.1 7.4L6.4 10c.8-2.4 3-4.1 5.6-4.1z"/></svg> Aanmelden met Google' }),
-      h('p', { class: 'small muted center', style: { margin: 0 } }, 'Elk gezin heeft een eigen, afgeschermde lijst.'))));
+      h('p', { class: 'small muted center', style: { margin: 0 } }, 'Elk gezin heeft een eigen, afgeschermde lijst.'),
+      copyrightLine())));
+}
+function copyrightLine() {
+  return h('div', { class: 'tiny muted center', style: { lineHeight: 1.5 } }, `${COPYRIGHT} · ${CONTACT}`);
 }
 
 function renderWelcome() {
@@ -856,10 +974,10 @@ function renderWelcome() {
     h('div', { class: 'col' },
       h('div', { class: 'small muted' }, 'Aangemeld als ' + (S.user.email || '')),
       h('h1', { class: 'title-lg' }, 'Welkom! Hoe wil je beginnen?')),
-    h('button', { class: 'choice main', onclick: () => { S.wizard = { step: 1, name: '', shops: ['Colruyt'], pack: 0, people: [] }; render(); } },
+    h('button', { class: 'choice main', onclick: startNewHousehold },
       h('div', { class: 'ic', style: { background: 'var(--accent)' } }, icon('home', 26, '#fff')),
       h('div', { class: 'col', style: { gap: '4px' } }, h('div', { style: { fontSize: '18px', fontWeight: 700 } }, 'Nieuw gezin aanmaken'),
-        h('div', { class: 'muted', style: { fontSize: '15px' } }, 'Je stelt de app in voor je gezin en nodigt daarna de anderen uit. Duurt ongeveer 3 minuten.'))),
+        h('div', { class: 'muted', style: { fontSize: '15px' } }, canCreateHousehold() ? 'Je stelt de app in voor je gezin en nodigt daarna de anderen uit. Duurt ongeveer 3 minuten.' : S.myRequest && S.myRequest.status === 'pending' ? 'Je aanvraag wacht op goedkeuring.' : 'Hiervoor vraag je eerst toegang aan bij de eigenaar van de app.'))),
     h('div', { class: 'card pad col', style: { gap: '14px', borderRadius: '18px' } },
       h('div', { class: 'row', style: { alignItems: 'flex-start', gap: '14px' } },
         h('div', { class: 'choice ic', style: { padding: 0, border: 'none', background: 'var(--accent-soft)' } }, icon('join', 26, 'var(--accent-ink)')),
@@ -868,7 +986,7 @@ function renderWelcome() {
       h('div', { class: 'row' }, input,
         h('button', { class: 'btn dark', onclick: async () => { const codeVal = S.form.joincode || ''; if (!codeVal.trim()) return; S.booting = true; render(); const ok = await joinWithCode(codeVal); if (ok) { await openHousehold(S.profile.lastHousehold); loadHouseholdNames(); } else { S.booting = false; render(); } } }, 'Doe mee'))),
     S.household === null && (S.profile?.households || []).length ? h('button', { class: 'btn block', onclick: () => openHousehold(S.profile.households[0]) }, 'Terug naar mijn gezin') : null,
-    h('div', { style: { marginTop: 'auto' }, class: 'row', }, h('button', { class: 'btn ghost', onclick: () => signOut(auth) }, 'Afmelden'))));
+    h('div', { style: { marginTop: 'auto' }, class: 'col center' }, h('button', { class: 'btn ghost', onclick: () => signOut(auth) }, 'Afmelden'), copyrightLine())));
 }
 
 // ---------- Wizard ----------
@@ -990,6 +1108,16 @@ function revokeInvite(inv) {
 
 // ---------- App-schil ----------
 function renderApp() {
+  if (S.household.blocked) {
+    return h('div', { class: 'screen' }, h('div', { class: 'login' },
+      h('div', { class: 'col', style: { gap: '16px' } },
+        h('div', { class: 'logo', style: { background: '#A3271F' } }, icon('shield', 34, '#fff', 1.8)),
+        h('h1', { class: 'title' }, `${S.household.name} is geblokkeerd`),
+        h('p', { style: { margin: 0, color: 'var(--ink-2)' } }, 'De eigenaar van de app heeft de toegang voor dit gezin tijdelijk stopgezet. Neem contact op via ' + CONTACT + '.')),
+      h('div', { class: 'col' },
+        (S.profile.households || []).length > 1 ? h('button', { class: 'btn block', onclick: () => openSheet({ type: 'households' }) }, 'Ander gezin kiezen') : null,
+        h('button', { class: 'btn ghost block', onclick: () => signOut(auth) }, 'Afmelden'), copyrightLine())));
+  }
   const shopper = canShop();
   const tabs = shopper || isAdmin()
     ? [['list', 'Lijst', 'list'], ['add', 'Toevoegen', 'plus'], ['settings', 'Instellingen', 'gear']]
@@ -1012,7 +1140,8 @@ function renderApp() {
         : null,
       S.view === 'add' ? renderAddFooter() : null,
       h('nav', { class: 'tabs', style: { '--n': tabs.length } }, tabs.map(([v, label, ic]) =>
-        h('button', { class: (S.view === v || (v === 'settings' && ['cards', 'history'].includes(S.view)) ? 'on' : ''), 'aria-current': S.view === v ? 'page' : null, onclick: () => { S.view = v; S.page = null; S.swiped = null; window.scrollTo(0, 0); render(); } }, icon(ic, 24), label)))));
+        h('button', { class: (S.view === v || (v === 'settings' && ['cards', 'history'].includes(S.view)) ? 'on' : ''), 'aria-current': S.view === v ? 'page' : null, onclick: () => { S.view = v; S.page = null; S.swiped = null; window.scrollTo(0, 0); render(); } },
+          h('span', { style: { position: 'relative', display: 'inline-flex' } }, icon(ic, 24), v === 'settings' && S.isOwner && S.ownerRequests.length ? h('span', { class: 'tabdot', 'aria-label': 'nieuwe aanvragen' }) : null), label)))));
 }
 
 function headerBlock(title, extra) {
@@ -1048,6 +1177,8 @@ function renderList() {
       (S.household.shops || []).length ? h('button', { class: 'btn sm grow', style: { height: '44px', borderRadius: '12px', fontSize: '14px' }, onclick: () => openSheet({ type: 'shop' }) }, icon('route', 18, 'var(--ink-2)'), 'Route: ' + (shop || '—'), icon('down', 14)) : h('div', { class: 'grow' }),
       h('button', { class: 'btn sm soft', style: { height: '44px', borderRadius: '12px' }, onclick: announceShopping }, icon('bell', 18, 'var(--accent-ink)'), 'Ik ga winkelen'),
       S.cards.length ? h('button', { class: 'iconbtn', 'aria-label': 'Klantenkaarten', onclick: () => { S.view = 'cards'; render(); } }, icon('card', 20, 'var(--ink-2)')) : null) : null,
+    S.isOwner && S.ownerRequests.length ? h('button', { class: 'banner', style: { border: 'none', textAlign: 'left', width: '100%' }, onclick: () => { S.view = 'settings'; S.page = 'owner'; S.ownerHouseholds = null; render(); } }, icon('bell', 22, '#1F4E79'),
+      h('div', { class: 'grow' }, h('b', {}, `${S.ownerRequests.length} nieuwe toegangsaanvraag${S.ownerRequests.length === 1 ? '' : 'en'}`), S.ownerRequests.map((r) => r.name).join(', '))) : null,
     !shopper ? h('div', { class: 'card', style: { padding: '10px 12px', fontSize: '14px', color: 'var(--ink-2)' } }, 'Je eigen lijnen herken je aan het potloodje. Tik erop om aan te passen, of veeg naar links om te wissen.') : null,
     showEvent ? h('div', { class: 'banner' }, icon('bell', 22, '#1F4E79'),
       h('div', { class: 'grow' }, h('b', {}, `${ev.byName || nameOf(ev.by)} gaat winkelen${ev.shop ? ' (' + ev.shop + ')' : ''}`), 'Nog iets nodig? Zet het nu op de lijst.'),
@@ -1190,11 +1321,12 @@ function renderAdd() {
   for (const i of S.items) if (i.status === 'open') onList.set(norm(i.name) + '|' + (i.unit || ''), i);
   const basis = S.catalog.filter((c) => c.basis);
   const basisMissing = basis.filter((c) => !onList.has(norm(c.name) + '|' + (c.unit || '')));
-  const cats = ['Alles', ...catOrder().filter((c) => c !== MANUAL_CATEGORY && S.catalog.some((x) => x.category === c))];
+  // In Toevoegen staan de afdelingen alfabetisch (op de lijst volgen ze de looproute van de winkel)
+  const cats = ['Alles', ...[...new Set(S.catalog.map((x) => x.category).filter(Boolean))].filter((c) => c !== MANUAL_CATEGORY).sort((a, b) => a.localeCompare(b, 'nl'))];
   const q = norm(S.search);
   let list = S.catalog.filter((c) => (q ? norm(c.name).includes(q) : (S.chip === 'Alles' || c.category === S.chip)));
   const order = catOrder();
-  list.sort((a, b) => (order.indexOf(a.category) - order.indexOf(b.category)) || a.name.localeCompare(b.name, 'nl'));
+  list.sort((a, b) => (a.category || '').localeCompare(b.category || '', 'nl') || a.name.localeCompare(b.name, 'nl'));
   const shown = list.slice(0, 400);
 
   const top = h('div', { class: 'top' },
@@ -1221,9 +1353,18 @@ function renderAdd() {
           h('span', { class: 'bold', style: { fontSize: '15px' } }, d.name), h('span', { class: 'tiny muted' }, `${(d.items || []).length} ingrediënten`))))));
   }
 
-  if (shown.length) {
+  if (shown.length && q) {
     main.append(h('div', { class: 'list' }, shown.map((c) => catalogRow(c, onList))));
-    if (list.length > shown.length) main.append(h('div', { class: 'small muted center' }, `${list.length - shown.length} meer · kies een categorie of zoek`));
+  } else if (shown.length) {
+    // per afdeling (alfabetisch), elk met zijn fotobanner zoals op de lijst
+    const byCat = new Map();
+    for (const c of shown) { const k = c.category || 'Overige'; if (!byCat.has(k)) byCat.set(k, []); byCat.get(k).push(c); }
+    for (const [cat, arr] of byCat) {
+      const ds = deptStyle(cat);
+      main.append(h('section', { class: 'dept' + (S.chip === 'Alles' ? ' compact' : ''), style: { '--dink': ds.ink, '--dtint': ds.tint } },
+        deptHeader(cat, arr.length),
+        h('div', { class: 'list dept-list' }, arr.map((c) => catalogRow(c, onList, ds)))));
+    }
   } else if (q) {
     main.append(h('div', { class: 'muted center', style: { padding: '12px' } }, `“${S.search}” staat niet in de catalogus. Voeg het hieronder manueel toe.`));
   } else if (!S.catalog.length) {
@@ -1243,7 +1384,13 @@ function renderAdd() {
   }
   main.append(h('section', { class: 'section' },
     h('h2', { class: 'group-h' }, 'Iets anders'),
-    h('form', { class: 'col', onsubmit: (e) => { e.preventDefault(); if (!m.name.trim()) return; stageEntry({ name: m.name.trim(), unit: m.unit, category: MANUAL_CATEGORY, catalogId: '', photo: '', qty: Number(m.qty) || 1, note: m.note || '' }); toast(`${m.name.trim()} klaargezet`); S.manual = { name: '', qty: 1, unit: 'stuk' }; S.search = ''; render(); } },
+    h('form', { class: 'col', onsubmit: (e) => {
+      e.preventDefault(); if (!m.name.trim()) return;
+      const doStage = () => { stageEntry({ name: m.name.trim(), unit: m.unit, category: MANUAL_CATEGORY, catalogId: '', photo: '', qty: Number(m.qty) || 1, note: m.note || '' }); toast(`${m.name.trim()} klaargezet`); S.manual = { name: '', qty: 1, unit: 'stuk' }; S.search = ''; render(); };
+      const ex = openItemFor(m.name.trim(), null);
+      if (ex && !S.dupeOk[stageKey(m.name.trim(), m.unit)]) { openSheet({ type: 'dupe', item: ex.id, onYes: () => { S.dupeOk[stageKey(m.name.trim(), m.unit)] = true; doStage(); } }); return; }
+      doStage();
+    } },
       h('div', { class: 'row' },
         h('input', { class: 'field', 'data-key': 'mname', placeholder: 'Eigen artikel, bv. verjaardagstaart', 'aria-label': 'Eigen artikel', value: m.name, oninput: (e) => { m.name = e.target.value; m.touched = true; } }),
         h('input', { class: 'field', 'data-key': 'mqty', inputmode: 'decimal', 'aria-label': 'Hoeveelheid', style: { width: '64px', textAlign: 'center', padding: '0 6px' }, value: String(m.qty), oninput: (e) => { m.qty = e.target.value.replace(',', '.'); } })),
@@ -1266,20 +1413,21 @@ function renderAdd() {
   return h('div', {}, top, main);
 }
 
-function catalogRow(c, onList) {
+function catalogRow(c, onList, ds) {
   const k = stageKey(c.name, c.unit);
   const st = S.staged[k];
   const n = st ? st.qty : 0;
   const existing = onList.get(norm(c.name) + '|' + (c.unit || ''));
   const lb = lastBought(c.name);
-  let sub = existing ? `al op lijst: ${fmtQty(qtyOf(existing), c.unit)}${existing.note ? ' · “' + existing.note + '”' : ''}` : (c.basis ? 'basis' : '');
+  let sub = existing ? '' : (c.basis ? 'basis' : '');
   if (!existing && lb) sub = (sub ? sub + ' · ' : '') + `laatst gekocht ${fmtWhen(lb.at).replace(/ \d\d:\d\d$/, '')}`;
   const noteOpen = S.noteOpen === k;
   return h('div', { class: 'col', style: { gap: 0 } },
     h('div', { class: 'crow' },
-      thumb(c.photo, c.category, true),
+      thumb(c.photo, c.category, true, ds),
       h('div', { class: 'grow col', style: { gap: '1px' } },
         h('div', { class: 'bold', style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, c.name),
+        existing ? h('div', { class: 'onlist' }, icon('warn', 14, 'currentColor', 2.2), `al op lijst: ${fmtQty(qtyOf(existing), existing.unit)} · ${partsText(existing)}${existing.note ? ' · “' + existing.note + '”' : ''}`) : null,
         sub ? h('div', { class: 'small muted' }, sub) : null,
         st && st.note && !noteOpen ? h('div', { class: 'inote' }, '“' + st.note + '”') : null),
       h('button', { class: 'iconbtn plain', style: { width: '36px' }, 'aria-label': `Opmerking bij ${c.name}`, onclick: () => { S.noteOpen = noteOpen ? null : k; if (!S.staged[k]) S.staged[k] = { name: c.name, unit: c.unit, category: c.category, catalogId: c.id, photo: c.photo || '', note: '', qty: 0 }; render(); } }, icon('pencil', 18, noteOpen || (st && st.note) ? 'var(--accent)' : 'var(--ink-3)')),
@@ -1405,13 +1553,18 @@ function renderSettings() {
       shopper ? h('div', { class: 'list' },
         nav('Recent gekocht & gewist', 'terugzetten wat per ongeluk weg is', 'history', 'clock'),
         S.cards.length ? nav('Klantenkaarten tonen', null, 'cards', 'card') : null) : null,
+      S.isOwner ? h('div', { class: 'list' },
+        h('button', { class: 'navrow', onclick: () => { S.page = 'owner'; S.ownerHouseholds = null; window.scrollTo(0, 0); render(); } },
+          icon('shield', 22, 'var(--ink-2)'), h('div', { class: 'grow' }, h('span', { class: 'bold' }, 'App-beheer'), h('span', { class: 'small muted' }, 'toegangsaanvragen en gezinnen')),
+          S.ownerRequests.length ? h('span', { class: 'reddot' }, String(S.ownerRequests.length)) : null, icon('right', 18, 'var(--ink-3)'))) : null,
       h('div', { class: 'list' },
         FEATURES.multiHousehold ? nav('Gezin wisselen of toevoegen', `${(S.profile.households || []).length} ${(S.profile.households || []).length === 1 ? 'gezin' : 'gezinnen'}`, 'households', 'home') : null,
         nav('Meldingen', 'Notification' in window ? ({ granted: 'aan', denied: 'geblokkeerd in je browser', default: 'uit' }[Notification.permission]) : 'niet ondersteund op dit toestel', 'notify', 'bell'),
         realRole() !== 'member' ? nav('Bekijk als…', 'testweergave voor een andere rol', 'viewas', 'user') : null,
         nav('Account & privacy', null, 'account', 'user')),
       h('button', { class: 'btn block', onclick: () => signOut(auth) }, 'Afmelden'),
-      h('button', { class: 'tiny muted center', style: { border: 'none', background: 'none', padding: '8px' }, onclick: () => { S.vtaps = (S.vtaps || 0) + 1; if (S.vtaps >= 5) { S.vtaps = 0; S.debug = !S.debug; render(); } } }, `${APP_NAME} · versie ${window.APP_VERSION || ''}`)));
+      h('button', { class: 'tiny muted center', style: { border: 'none', background: 'none', padding: '8px' }, onclick: () => { S.vtaps = (S.vtaps || 0) + 1; if (S.vtaps >= 5) { S.vtaps = 0; S.debug = !S.debug; render(); } } }, `${APP_NAME} · versie ${window.APP_VERSION || ''} · ${COPYRIGHT}`),
+      h('div', { class: 'tiny muted center' }, CONTACT)));
 }
 
 function subHead(title) {
@@ -1430,6 +1583,7 @@ function renderSettingsPage() {
   if (p === 'notify') return pageNotify();
   if (p === 'viewas') return pageViewAs();
   if (p === 'account') return pageAccount();
+  if (p === 'owner') return pageOwner();
   S.page = null; return renderSettings();
 }
 
@@ -1560,7 +1714,7 @@ function pageHouseholds() {
     h('div', { class: 'list' }, list.map((hid) => h('button', { class: 'navrow', onclick: () => { if (hid !== S.hid) openHousehold(hid); else { S.page = null; render(); } } },
       icon(hid === S.hid ? 'check' : 'home', 20, hid === S.hid ? 'var(--accent)' : 'var(--ink-2)'),
       h('div', { class: 'grow' }, h('span', { class: 'bold' }, S.hhNames[hid] || '…'), hid === S.hid ? h('span', { class: 'small muted' }, 'huidig gezin') : null)))),
-    h('button', { class: 'btn primary block', onclick: () => { S.wizard = { step: 1, name: '', shops: ['Colruyt'], pack: 0, people: [] }; render(); } }, icon('home', 18, '#fff'), 'Nieuw gezin aanmaken'),
+    h('button', { class: 'btn primary block', onclick: startNewHousehold }, icon('home', 18, '#fff'), 'Nieuw gezin aanmaken'),
     h('form', { class: 'row', onsubmit: async (e) => { e.preventDefault(); const code = S.form.hhcode || ''; if (!code.trim()) return; S.form.hhcode = ''; const ok = await joinWithCode(code); if (ok) { await openHousehold(S.profile.lastHousehold); loadHouseholdNames(); } } },
       h('input', { class: 'field', 'data-key': 'hhcode', placeholder: 'Uitnodigingscode', 'aria-label': 'Uitnodigingscode', style: { textTransform: 'uppercase' }, value: S.form.hhcode || '', oninput: (e) => { S.form.hhcode = e.target.value; } }),
       h('button', { class: 'btn dark', type: 'submit' }, 'Doe mee')),
@@ -1640,7 +1794,45 @@ function pageAccount() {
     h('div', { class: 'card pad col' },
       h('div', { class: 'bold' }, 'Account verwijderen'),
       h('div', { class: 'small' }, 'Je verlaat al je gezinnen (gezinnen waar je alleen in zit worden verwijderd) en je account wordt gewist.'),
-      h('button', { class: 'btn danger', onclick: deleteAccountFlow }, 'Mijn account verwijderen'))));
+      h('button', { class: 'btn danger', onclick: deleteAccountFlow }, 'Mijn account verwijderen')),
+    h('div', { class: 'card pad col' },
+      h('div', { class: 'bold' }, 'Over deze app'),
+      h('div', { class: 'small' }, `${APP_NAME} · versie ${window.APP_VERSION || ''}`),
+      h('div', { class: 'small' }, `${COPYRIGHT}. Alle rechten voorbehouden.`),
+      h('div', { class: 'small' }, 'Contact: ' + CONTACT),
+      h('div', { class: 'small' }, 'Niet verbonden aan Colruyt of andere winkels. Winkelnamen en productnummers dienen enkel als verwijzing.'),
+      h('div', { class: 'small' }, "Afdelingsfoto's: Unsplash en Pexels."))));
+}
+
+// ---------- App-beheer (enkel de eigenaar) ----------
+function pageOwner() {
+  if (!S.isOwner) { S.page = null; return renderSettings(); }
+  if (S.ownerHouseholds === null) { S.ownerHouseholds = undefined; loadOwnerHouseholds(); }
+  const reqs = S.ownerRequests;
+  const hhs = S.ownerHouseholds || [];
+  return h('div', {}, subHead('App-beheer'), h('div', { class: 'main' },
+    h('section', { class: 'section' }, h('h2', { class: 'group-h' }, `Toegangsaanvragen (${reqs.length})`),
+      reqs.length ? h('div', { class: 'list' }, reqs.map((r) => h('div', { class: 'col', style: { padding: '12px 14px', gap: '8px' } },
+        h('div', { class: 'col', style: { gap: '2px' } },
+          h('div', { class: 'bold' }, r.name || '(geen naam)'),
+          h('div', { class: 'small muted' }, `${r.email} · ${fmtWhen(r.createdAt)}`),
+          r.message ? h('div', { class: 'inote' }, '“' + r.message + '”') : null),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn sm primary', onclick: () => decideRequest(r, true) }, 'Goedkeuren'),
+          h('button', { class: 'btn sm danger', onclick: () => decideRequest(r, false) }, 'Weigeren'))))) : h('div', { class: 'muted small' }, 'Geen openstaande aanvragen.'),
+      S.ownerDecided.length ? h('div', { class: 'small muted' }, 'Net behandeld: ' + S.ownerDecided.map((r) => `${r.name} (${r.status === 'approved' ? 'goedgekeurd' : 'geweigerd'})`).join(', ')) : null),
+    h('section', { class: 'section' }, h('h2', { class: 'group-h' }, `Gezinnen (${hhs.length})`),
+      S.ownerHouseholds === undefined ? h('div', { class: 'spinner' }) : null,
+      hhs.length ? h('div', { class: 'list' }, hhs.map((x) => {
+        const n = Object.keys(x.members || {}).length;
+        return h('div', { class: 'row', style: { padding: '10px 14px', minHeight: '56px' } },
+          h('div', { class: 'grow col', style: { gap: '2px' } },
+            h('div', { class: 'bold' }, x.name || '(zonder naam)', x.blocked ? h('span', { class: 'pill warn', style: { marginLeft: '6px' } }, 'geblokkeerd') : null),
+            h('div', { class: 'small muted' }, `${n} ${n === 1 ? 'lid' : 'leden'} · gestart ${fmtDay(x.createdAt)}${x.memberNames && x.createdBy ? ' door ' + (x.memberNames[x.createdBy] || '?') : ''}`)),
+          x.id === S.hid ? h('span', { class: 'small muted' }, 'jouw gezin') :
+            h('button', { class: 'btn sm' + (x.blocked ? '' : ' danger'), onclick: () => setHouseholdBlocked(x, !x.blocked) }, x.blocked ? 'Vrijgeven' : 'Blokkeren'));
+      })) : null,
+      h('button', { class: 'btn block', onclick: () => { S.ownerHouseholds = undefined; loadOwnerHouseholds(); render(); } }, 'Vernieuwen'))));
 }
 
 async function deleteAccountFlow() {
@@ -1800,6 +1992,9 @@ function sheetBody(sh) {
   if (sh.type === 'dishEdit') return sheetDishEdit(sh);
   if (sh.type === 'cardEdit') return sheetCardEdit(sh);
   if (sh.type === 'households') return sheetHouseholds();
+  if (sh.type === 'dupe') return sheetDupe(sh);
+  if (sh.type === 'access') return h('div', { class: 'col', style: { gap: '14px' } }, h('h2', {}, 'Nieuw gezin aanmaken'), accessPanel());
+  if (sh.type === 'notifyApproved') return sheetNotifyApproved(sh);
   return null;
 }
 
@@ -1919,7 +2114,8 @@ function sheetDish(sh) {
     h('div', { class: 'small muted' }, 'Vink uit wat je nog in huis hebt.'),
     h('div', { class: 'list' }, (d.items || []).map((x, i) => h('label', { class: 'row', style: { padding: '10px 14px', minHeight: '52px' } },
       h('input', { type: 'checkbox', checked: sh.sel[i], style: { width: '22px', height: '22px' }, onchange: (e) => { sh.sel[i] = e.target.checked; } }),
-      h('span', { class: 'grow' }, x.name, onList.has(norm(x.name)) ? h('span', { class: 'small muted' }, ' · staat al op de lijst (wordt bijgeteld)') : null),
+      h('span', { class: 'grow col', style: { gap: '2px' } }, h('span', {}, x.name),
+        (() => { const ex = openItemFor(x.name, null); return ex ? h('span', { class: 'onlist' }, icon('warn', 14, 'currentColor', 2.2), `al op lijst: ${fmtQty(qtyOf(ex), ex.unit)} · ${partsText(ex)}, wordt bijgeteld`) : null; })()),
       h('span', { class: 'muted' }, fmtQty(x.qty, x.unit))))),
     h('button', { class: 'btn primary big block', onclick: () => {
       let n = 0;
@@ -2011,6 +2207,28 @@ function sheetCardEdit(sh) {
       h('span', { class: 'small muted', style: { fontWeight: 400 } }, 'Toont de app van de winkel een QR-code met een andere inhoud? Scan die met de camera van een ander toestel en plak hier wat je ziet.')) : null,
     h('button', { class: 'btn primary big block', type: 'submit' }, 'Bewaren'),
     sh.id ? h('button', { class: 'btn danger block', type: 'button', onclick: () => { if (confirm('Kaart verwijderen?')) { bg(deleteDoc(hhRef('cards', sh.id))); closeSheet(); } } }, 'Verwijderen') : null);
+}
+
+function sheetDupe(sh) {
+  const it = S.items.find((i) => i.id === sh.item);
+  if (!it) return null;
+  return h('div', { class: 'col', style: { gap: '14px' } },
+    h('div', { class: 'row', style: { gap: '10px', color: '#A3271F' } }, icon('warn', 26, '#A3271F', 2), h('h2', { style: { color: '#A3271F' } }, `${it.name} staat al op de lijst`)),
+    h('div', {}, `${fmtQty(qtyOf(it), it.unit)}, toegevoegd door ${partsText(it)} (${fmtWhen(it.addedAt)}).`),
+    h('div', { class: 'small muted' }, 'Voeg je het toch toe, dan wordt jouw hoeveelheid bij de bestaande lijn geteld.'),
+    h('button', { class: 'btn primary big block', onclick: () => { const f = sh.onYes; S.sheet = null; f(); } }, 'Toch toevoegen'),
+    h('button', { class: 'btn block', onclick: closeSheet }, 'Annuleren'));
+}
+function sheetNotifyApproved(sh) {
+  const r = sh.req;
+  const msg = `Hoi ${r.name}, je aanvraag voor de app ${APP_NAME} is goedgekeurd! Open ${appUrl()} , meld je aan met hetzelfde Google-account en kies 'Nieuw gezin aanmaken'. Groeten, ${firstName(S.user.displayName)}`;
+  return h('div', { class: 'col', style: { gap: '14px' } },
+    h('h2', {}, `${r.name} is goedgekeurd`),
+    h('div', {}, `Wil je ${r.name} laten weten dat het in orde is? Je krijgt een kant-en-klaar bericht; je tikt enkel nog op Verzenden.`),
+    h('div', { class: 'card pad small' }, msg),
+    h('a', { class: 'btn primary big block', href: `mailto:${encodeURIComponent(r.email || '')}?subject=${encodeURIComponent('Je toegang tot ' + APP_NAME + ' is goedgekeurd')}&body=${encodeURIComponent(msg)}`, onclick: () => setTimeout(closeSheet, 300) }, 'Mail'),
+    h('a', { class: 'btn block', href: `https://wa.me/?text=${encodeURIComponent(msg)}`, target: '_blank', rel: 'noopener', onclick: () => setTimeout(closeSheet, 300) }, 'WhatsApp'),
+    h('button', { class: 'btn ghost block', onclick: closeSheet }, 'Niet nu'));
 }
 
 function sheetHouseholds() {

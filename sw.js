@@ -1,6 +1,7 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
+// © 2026 Wouter Janssens. Alle rechten voorbehouden. · wj.apps.store@gmail.com
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.3.1';
+const VERSION = 'v1.4.0';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [
@@ -59,17 +60,24 @@ self.addEventListener('fetch', (event) => {
   if (!cacheable) return; // productfoto's e.d. gewoon via het netwerk
   if (isDeptPhoto && req.mode === 'cors') return; // kleur uitlezen: rechtstreeks, niet uit de cache
 
-  // Eigen bestanden: netwerk eerst (altijd de nieuwste versie), cache als terugval.
+  // Eigen bestanden: netwerk eerst (altijd de nieuwste versie), maar wacht
+  // hoogstens 1,5 seconde; daarna de bewaarde versie (en het netwerk werkt
+  // de cache op de achtergrond bij voor de volgende keer).
   if (sameOrigin) {
+    const network = fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+      .then(async (fresh) => { if (fresh.ok) { const c = await caches.open(CACHE); await c.put(req, fresh.clone()); } return fresh; });
+    event.waitUntil(network.catch(() => {}));
     event.respondWith((async () => {
+      const cached = await caches.match(req, { ignoreSearch: true });
+      if (!cached) {
+        try { return await network; } catch { return (await caches.match('index.html')) || new Response('', { status: 504 }); }
+      }
+      const timeout = new Promise((res) => setTimeout(() => res(null), 1500));
       try {
-        // 'no-cache': altijd bij GitHub nagaan of er een nieuwere versie is (buffer van max. 10 min overslaan)
-        const fresh = await fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' });
-        if (fresh.ok) { const c = await caches.open(CACHE); c.put(req, fresh.clone()); }
-        return fresh;
+        const winner = await Promise.race([network.then((r) => r.clone()), timeout]);
+        return winner || cached;
       } catch {
-        const cached = await caches.match(req, { ignoreSearch: true });
-        return cached || caches.match('index.html');
+        return cached;
       }
     })());
     return;

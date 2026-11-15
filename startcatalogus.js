@@ -1,3 +1,4 @@
+// © 2026 Wouter Janssens. Alle rechten voorbehouden. · wj.apps.store@gmail.com
 // Startcatalogus die een nieuw gezin kan kiezen in de wizard.
 // Formaat per artikel: [categorie, artikel, eenheid, standaardhoeveelheid, basis?, ookInKleinHuishouden?]
 

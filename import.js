@@ -1,4 +1,6 @@
 // =====================================================================
+//  © 2026 Wouter Janssens. Alle rechten voorbehouden. · wj.apps.store@gmail.com
+// =====================================================================
 //  Slimme import van een spreadsheet (Excel / Google Spreadsheets / CSV)
 //  Herkent tabbladen aan hun kolommen, zoekt zelf de rij met kolomtitels,
 //  kent synoniemen (Product = Artikel, Afdeling = Categorie, Menu = Gerecht…)
