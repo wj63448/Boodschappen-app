@@ -1,7 +1,7 @@
 // Service worker: zorgt dat de app ook zonder netwerk opstart.
 // © 2026 Wouter Janssens. Alle rechten voorbehouden. · wj.apps.store@gmail.com
 // Verhoog VERSION telkens je nieuwe bestanden uploadt, dan krijgt iedereen de update.
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.4.1';
 const CACHE = 'boodschappen-' + VERSION;
 
 const APP_SHELL = [

@@ -78,7 +78,7 @@ const S = {
   joinCode: null,
   dismissedEvent: store.get('dismissedEvent', null),
   form: {},
-  isOwner: store.get('isOwner', false),
+  isOwner: false,
   myRequest: null,
   ownerRequests: [],
   ownerHouseholds: null,
@@ -445,7 +445,7 @@ onAuthStateChanged(auth, async (user) => {
   S.user = user;
   stopSubs();
   userUnsubs.forEach((u) => { try { u(); } catch { /* */ } }); userUnsubs = [];
-  S.household = null; S.hid = null; S.profile = null; S.myRequest = null; S.ownerRequests = [];
+  S.household = null; S.hid = null; S.profile = null; S.myRequest = null; S.ownerRequests = []; S.isOwner = false; S.ownerHouseholds = null;
   if (!user) { S.booting = false; render(); return; }
   S.booting = true; render();
   try {
@@ -478,6 +478,7 @@ onAuthStateChanged(auth, async (user) => {
 //  Toegang: aanvragen (nieuwe gezinnen) en app-beheer (eigenaar)
 // ---------------------------------------------------------------------
 function watchAccess(user) {
+  S.isOwner = store.get('isOwner:' + user.uid, false);
   // eigen aanvraag (live)
   userUnsubs.push(onSnapshot(doc(db, 'accessRequests', user.uid), (s) => {
     S.myRequest = s.exists() ? { id: s.id, ...s.data({ serverTimestamps: 'estimate' }) } : null;
@@ -485,17 +486,24 @@ function watchAccess(user) {
   }, () => {}));
   // ben ik de eigenaar van de app? (enkel de eigenaar mag dit document lezen)
   getDoc(doc(db, 'app', 'owner')).then(() => {
-    S.isOwner = true; store.set('isOwner', true); render();
+    if (!S.user || S.user.uid !== user.uid) return;
+    S.isOwner = true; store.set('isOwner:' + user.uid, true); render();
     userUnsubs.push(onSnapshot(query(collection(db, 'accessRequests'), where('status', '==', 'pending')), (snap) => {
       S.ownerRequests = docsOf(snap).sort((a, b) => (toDate(a.createdAt) || 0) - (toDate(b.createdAt) || 0));
       render();
     }, () => {}));
   }).catch((e) => {
-    if (e && e.code === 'permission-denied') { S.isOwner = false; store.set('isOwner', false); render(); }
+    if (e && e.code === 'permission-denied' && S.user && S.user.uid === user.uid) { S.isOwner = false; store.set('isOwner:' + user.uid, false); render(); }
   });
 }
-function canCreateHousehold() { return S.isOwner || (S.myRequest && S.myRequest.status === 'approved'); }
+function canCreateHousehold() {
+  if (S.viewAs) return false; // testweergave: gedraag je als een echt lid / echte winkelaar
+  return S.isOwner || (S.myRequest && S.myRequest.status === 'approved');
+}
+// Een lid ziet 'Nieuw gezin aanmaken' niet (enkel uitnodigingen); wie nog geen gezin heeft wel.
+function mayOfferNewHousehold() { return !S.household || role() !== 'member'; }
 function startNewHousehold() {
+  if (!mayOfferNewHousehold()) return;
   if (canCreateHousehold()) { S.sheet = null; S.wizard = { step: 1, name: '', shops: ['Colruyt'], pack: 0, people: [] }; render(); }
   else openSheet({ type: 'access' });
 }
@@ -1176,7 +1184,8 @@ function renderList() {
     shopper ? h('div', { class: 'row' },
       (S.household.shops || []).length ? h('button', { class: 'btn sm grow', style: { height: '44px', borderRadius: '12px', fontSize: '14px' }, onclick: () => openSheet({ type: 'shop' }) }, icon('route', 18, 'var(--ink-2)'), 'Route: ' + (shop || '—'), icon('down', 14)) : h('div', { class: 'grow' }),
       h('button', { class: 'btn sm soft', style: { height: '44px', borderRadius: '12px' }, onclick: announceShopping }, icon('bell', 18, 'var(--accent-ink)'), 'Ik ga winkelen'),
-      S.cards.length ? h('button', { class: 'iconbtn', 'aria-label': 'Klantenkaarten', onclick: () => { S.view = 'cards'; render(); } }, icon('card', 20, 'var(--ink-2)')) : null) : null,
+      S.cards.length ? h('button', { class: 'iconbtn', 'aria-label': 'Klantenkaarten', onclick: () => { S.view = 'cards'; render(); } }, icon('card', 20, 'var(--ink-2)')) : null) :
+      S.cards.length ? h('div', { class: 'row' }, h('button', { class: 'btn sm grow', style: { height: '44px', borderRadius: '12px', fontSize: '14px' }, onclick: () => { S.view = 'cards'; render(); } }, icon('card', 18, 'var(--ink-2)'), 'Klantenkaarten')) : null,
     S.isOwner && S.ownerRequests.length ? h('button', { class: 'banner', style: { border: 'none', textAlign: 'left', width: '100%' }, onclick: () => { S.view = 'settings'; S.page = 'owner'; S.ownerHouseholds = null; render(); } }, icon('bell', 22, '#1F4E79'),
       h('div', { class: 'grow' }, h('b', {}, `${S.ownerRequests.length} nieuwe toegangsaanvraag${S.ownerRequests.length === 1 ? '' : 'en'}`), S.ownerRequests.map((r) => r.name).join(', '))) : null,
     !shopper ? h('div', { class: 'card', style: { padding: '10px 12px', fontSize: '14px', color: 'var(--ink-2)' } }, 'Je eigen lijnen herken je aan het potloodje. Tik erop om aan te passen, of veeg naar links om te wissen.') : null,
@@ -1714,7 +1723,7 @@ function pageHouseholds() {
     h('div', { class: 'list' }, list.map((hid) => h('button', { class: 'navrow', onclick: () => { if (hid !== S.hid) openHousehold(hid); else { S.page = null; render(); } } },
       icon(hid === S.hid ? 'check' : 'home', 20, hid === S.hid ? 'var(--accent)' : 'var(--ink-2)'),
       h('div', { class: 'grow' }, h('span', { class: 'bold' }, S.hhNames[hid] || '…'), hid === S.hid ? h('span', { class: 'small muted' }, 'huidig gezin') : null)))),
-    h('button', { class: 'btn primary block', onclick: startNewHousehold }, icon('home', 18, '#fff'), 'Nieuw gezin aanmaken'),
+    mayOfferNewHousehold() ? h('button', { class: 'btn primary block', onclick: startNewHousehold }, icon('home', 18, '#fff'), 'Nieuw gezin aanmaken') : null,
     h('form', { class: 'row', onsubmit: async (e) => { e.preventDefault(); const code = S.form.hhcode || ''; if (!code.trim()) return; S.form.hhcode = ''; const ok = await joinWithCode(code); if (ok) { await openHousehold(S.profile.lastHousehold); loadHouseholdNames(); } } },
       h('input', { class: 'field', 'data-key': 'hhcode', placeholder: 'Uitnodigingscode', 'aria-label': 'Uitnodigingscode', style: { textTransform: 'uppercase' }, value: S.form.hhcode || '', oninput: (e) => { S.form.hhcode = e.target.value; } }),
       h('button', { class: 'btn dark', type: 'submit' }, 'Doe mee')),
@@ -2119,14 +2128,18 @@ function sheetDish(sh) {
       h('span', { class: 'muted' }, fmtQty(x.qty, x.unit))))),
     h('button', { class: 'btn primary big block', onclick: () => {
       let n = 0;
+      const keepStaged = S.staged; S.staged = {};
       (d.items || []).forEach((x, i) => {
         if (!sh.sel[i]) return;
         const c = S.catalog.find((cc) => norm(cc.name) === norm(x.name));
         stageEntry({ name: c ? c.name : x.name, unit: x.unit || (c && c.unit) || 'stuk', category: c ? c.category : (x.category || MANUAL_CATEGORY), catalogId: c ? c.id : '', photo: c ? c.photo || '' : '', qty: x.qty || 1 });
         n++;
       });
-      closeSheet(); toast(`${n} ingrediënten klaargezet`);
-    } }, 'Klaarzetten'));
+      closeSheet();
+      // rechtstreeks op de lijst; wat al klaarstond in Toevoegen blijft klaarstaan
+      if (n) commitStaged();
+      S.staged = keepStaged;
+    } }, 'Op de lijst zetten'));
 }
 
 function sheetCatEdit(sh) {
